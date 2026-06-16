@@ -34,7 +34,9 @@
   --maxw:1240px;
   --c-MOV:#2E7D5B; --c-COG:#7A4E97; --c-AVC:#BC4530; --c-EPI:#C2871C;
   --c-DES:#2272A0; --c-EMG:#4E5DAE; --c-CEF:#AE4E74; --c-SON:#2F8585;
-  --c-ONC:#6B7A2A; --c-INF:#9A6536; --c-GER:#56636E;
+  --c-ONC:#6B7A2A; --c-INF:#9A6536; --c-DAU:#0E8F8C; --c-NIC:#B5403A;
+  --c-RHB:#3F9E78; --c-NOF:#3B6FB5; --c-NOT:#B5732C; --c-NGE:#9A55B0;
+  --c-NPE:#C7568C; --c-GER:#56636E;
 }
 *{box-sizing:border-box}
 html,body{margin:0}
@@ -159,6 +161,25 @@ button{font-family:inherit;cursor:pointer}
 .section__title{font-family:Archivo,sans-serif;font-weight:700;font-size:18px;letter-spacing:-.01em}
 .section__n{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-faint);margin-left:auto}
 
+/* ---------- Subgroup navigation (level 2) ---------- */
+.subnav{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 20px}
+.subnav:empty{display:none}
+.schip{font-family:Inter,sans-serif;font-size:12.5px;border:1px solid var(--line-strong);
+  background:var(--surface);color:var(--ink-soft);border-radius:999px;padding:5px 12px;
+  display:inline-flex;gap:7px;align-items:center;transition:background .12s,color .12s}
+.schip:hover{background:#F6F8F9}
+.schip.active{background:var(--chan,var(--signal));color:#fff;border-color:transparent}
+.schip.active:hover{filter:brightness(1.06)}
+.schip .n{font-family:"IBM Plex Mono",monospace;font-size:11px;opacity:.7}
+
+.subsec{margin:0 0 26px}
+.subsec__head{display:flex;align-items:baseline;gap:10px;margin:0 0 11px;
+  padding-bottom:6px;border-bottom:1px solid var(--line)}
+.subsec__dot{width:8px;height:8px;border-radius:50%;background:var(--chan,#888);flex:none}
+.subsec__title{font-family:Archivo,sans-serif;font-weight:700;font-size:15px;letter-spacing:-.01em}
+.subsec__n{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--ink-faint);margin-left:auto}
+.tag--code{font-weight:500}
+
 .cards{display:grid;gap:12px}
 .card{position:relative;background:var(--surface);border:1px solid var(--line);
   border-radius:var(--radius);border-left:4px solid var(--chan,var(--line-strong));
@@ -281,12 +302,13 @@ footer code{font-family:"IBM Plex Mono",monospace;background:#EEF2F4;padding:1px
   <section class="feed">
     <div class="chips" id="chips"></div>
     <div class="banner" id="banner"><span id="bannerText"></span></div>
+    <div class="subnav" id="subnav"></div>
     <div id="feed"></div>
   </section>
 </div>
 
 <footer>
-  <strong>Fonte:</strong> PubMed via <a href="https://www.ncbi.nlm.nih.gov/books/NBK25501/" target="_blank" rel="noopener">NCBI E-utilities</a>. Cada periódico é consultado por sua abreviação NLM (campo <code>[ta]</code>); os artigos são ordenados por data e classificados por subespecialidade a partir do título.<br>
+  <strong>Fonte:</strong> PubMed via <a href="https://www.ncbi.nlm.nih.gov/books/NBK25501/" target="_blank" rel="noopener">NCBI E-utilities</a>. Cada periódico é consultado por sua abreviação NLM (campo <code>[ta]</code>); os artigos são ordenados por data e classificados em dois níveis a partir do título: <strong>subespecialidade</strong> (1º nível) e <strong>grupo de doenças</strong> (2º nível). Selecione uma subespecialidade para navegar pelos grupos de doenças; um mesmo artigo pode receber 2–3 rótulos quando o tema é transversal (ex.: RBD em sono e movimento; encefalite autoimune em epilepsia, cognição e neuroimunologia).<br>
   Aplicativo estático: todo o processamento ocorre no navegador. Para hospedar, basta publicar este <code>index.html</code> no GitHub Pages. A classificação por subespecialidade é heurística e serve para triagem rápida, não substitui a leitura do artigo.<br>
   <strong>Instalar no celular:</strong> Android/Chrome mostra o botão <em>Instalar app</em> acima. No iPhone, abra no Safari e use <em>Compartilhar → Adicionar à Tela de Início</em>.
 </footer>
@@ -303,7 +325,7 @@ const PROXIES = [
   u => "https://api.codetabs.com/v1/proxy/?quest=" + encodeURIComponent(u),
 ];
 const CACHE_TTL = 6 * 3600 * 1000; // 6 h
-const STORE = "radarneuro.v1";
+const STORE = "radarneuro.v2";
 
 const JOURNALS = [
   {ta:"Lancet Neurol", name:"The Lancet Neurology", hint:null},
@@ -328,27 +350,199 @@ const JOURNALS = [
   {ta:"Cephalalgia", name:"Cephalalgia", hint:"CEF"},
 ];
 
+/* Two-level taxonomy.
+   Level 1 = subespecialidade (channel). Level 2 = grupo de doenças (group, g[]).
+   `kw` on a channel are broad terms; `kw` on a group are the specific disease terms.
+   A channel matches if its own kw OR any of its groups' kw hit the title.
+   Classification is heuristic (title-only) and multi-rótulo: um artigo pode
+   pertencer a 2–3 subespecialidades e carregar vários grupos de doenças. */
 const CHANNELS = [
-  {code:"MOV", name:"Transtornos do Movimento", kw:["parkinson","parkinsonism","parkinsonian","dystonia","dystonic","tremor","ataxia","ataxic","chorea","choreic","huntington","dyskinesia","dyskinetic","myoclonus","myoclonic","tourette","restless legs","deep brain stimulation","DBS","levodopa","dopaminergic","basal ganglia","freezing of gait","bradykinesia","substantia nigra","multiple system atrophy","MSA","progressive supranuclear palsy","PSP","corticobasal","wilson disease","botulinum","essential tremor","alpha-synuclein","synucleinopathy","nigrostriatal","hemifacial spasm","spasticity","gait disorder"]},
-  {code:"COG", name:"Demência e Cognição", kw:["alzheimer","dementia","cognitive","cognition","amyloid","tau","tauopathy","frontotemporal","lewy bod","mild cognitive impairment","neuropsycholog","primary progressive aphasia","neurodegener","apolipoprotein","MCI"]},
-  {code:"AVC", name:"Cerebrovascular / AVC", kw:["stroke","ischemic","ischaemic","hemorrhage","haemorrhage","thrombectomy","thrombolysis","cerebrovascular","carotid","aneurysm","intracerebral","subarachnoid","alteplase","tenecteplase","vascular dementia","small vessel disease","recanalization","transient ischemic attack","moyamoya"]},
-  {code:"EPI", name:"Epilepsia", kw:["epilep","seizure","convuls","status epilepticus","antiseizure","antiepileptic","EEG","temporal lobe","SUDEP","ictal","interictal"]},
-  {code:"DES", name:"Neuroimunologia / EM", kw:["multiple sclerosis","demyelinat","neuromyelitis","NMOSD","MOGAD","optic neuritis","autoimmune encephalitis","neuroinflammat","oligoclonal","relapsing","disease-modifying"]},
-  {code:"EMG", name:"Neuromuscular", kw:["neuropathy","polyneuropathy","myopathy","myasthenia","amyotrophic lateral sclerosis","motor neuron","muscular dystrophy","guillain","CIDP","neuromuscular","nerve conduction","charcot-marie","spinal muscular atrophy","radiculopathy","peripheral nerve","ALS"]},
-  {code:"CEF", name:"Cefaleia e Dor", kw:["headache","migraine","cephalalgia","CGRP","cluster headache","trigeminal neuralgia","medication overuse"]},
-  {code:"SON", name:"Sono", kw:["insomnia","narcolepsy","circadian","obstructive sleep apnea","REM sleep","hypersomnia","parasomnia","sleep disorder"]},
-  {code:"ONC", name:"Neuro-oncologia", kw:["glioma","glioblastoma","brain tumor","brain tumour","meningioma","neuro-oncolog","astrocytoma","brain metastas","CNS lymphoma","IDH-mutant"]},
-  {code:"INF", name:"Neuroinfecção", kw:["meningitis","encephalitis","neurosyphilis","prion","creutzfeldt","neurocysticercosis","cerebral malaria","progressive multifocal"]},
-  {code:"GER", name:"Neurologia Geral", kw:[]},
+  {code:"CEF", name:"Cefaleia e Dor",
+   kw:["headache","migraine","cephalalgia","CGRP","cluster headache","trigeminal neuralgia","medication overuse","neuropathic pain"],
+   g:[
+    {code:"migranea", name:"Migrânea", kw:["migraine","migrainous","migraine aura","vestibular migraine","hemiplegic migraine","CGRP","gepant","ditan"]},
+    {code:"tensional", name:"Cefaleia tipo-tensional", kw:["tension-type headache","tension headache"]},
+    {code:"tac", name:"Trigêmino-autonômicas", kw:["cluster headache","trigeminal autonomic","paroxysmal hemicrania","hemicrania continua","SUNCT","SUNA"]},
+    {code:"secundaria", name:"Cefaleias secundárias", kw:["secondary headache","thunderclap headache","post-traumatic headache","spontaneous intracranial hypotension","low pressure headache"]},
+    {code:"mou", name:"Uso excessivo de medicação", kw:["medication overuse","medication-overuse"]},
+    {code:"neuralgia", name:"Neuralgias cranianas", kw:["trigeminal neuralgia","occipital neuralgia","glossopharyngeal neuralgia","cranial neuralgia"]},
+    {code:"dorneuro", name:"Dor neuropática", kw:["neuropathic pain","central pain","postherpetic neuralgia","chronic pain","painful neuropathy"]},
+   ]},
+  {code:"AVC", name:"Cerebrovascular / AVC",
+   kw:["stroke","ischemic","ischaemic","hemorrhage","haemorrhage","thrombectomy","thrombolysis","cerebrovascular","carotid","aneurysm","intracerebral","subarachnoid","alteplase","tenecteplase","recanalization","transient ischemic attack","moyamoya"],
+   g:[
+    {code:"isquemico", name:"AVC isquêmico", kw:["ischemic stroke","ischaemic stroke","acute ischemic","thrombectomy","thrombolysis","alteplase","tenecteplase","recanalization","large vessel occlusion","reperfusion","transient ischemic attack"]},
+    {code:"hip", name:"Hemorragia intraparenquimatosa", kw:["intracerebral hemorrhage","intracerebral haemorrhage","intraparenchymal hemorrhage"]},
+    {code:"hsa", name:"HSA / aneurismas", kw:["subarachnoid hemorrhage","subarachnoid haemorrhage","aneurysm","aneurysmal"]},
+    {code:"pequenosvasos", name:"Doença de pequenos vasos", kw:["small vessel disease","cerebral microbleeds","leukoaraiosis","cadasil","white matter hyperintensit"]},
+    {code:"tvc", name:"Trombose venosa cerebral", kw:["cerebral venous thrombosis","venous sinus thrombosis","CVST"]},
+    {code:"malformacoes", name:"Malformações vasculares", kw:["arteriovenous malformation","cavernoma","cavernous malformation","dural fistula","moyamoya"]},
+    {code:"prevencao", name:"Prevenção e risco vascular", kw:["stroke prevention","secondary prevention","vascular risk","carotid stenosis","atrial fibrillation","anticoagulation"]},
+   ]},
+  {code:"EPI", name:"Epilepsia",
+   kw:["epilep","seizure","convuls","status epilepticus","antiseizure","antiepileptic","EEG","temporal lobe","SUDEP","ictal","interictal"],
+   g:[
+    {code:"focal", name:"Epilepsias focais", kw:["focal epilepsy","focal seizure","temporal lobe epilepsy"]},
+    {code:"generalizada", name:"Epilepsias generalizadas", kw:["generalized epilepsy","generalised epilepsy","absence seizure","juvenile myoclonic"]},
+    {code:"estrutural", name:"Epilepsias estruturais", kw:["focal cortical dysplasia","hippocampal sclerosis","mesial temporal sclerosis","structural epilepsy"]},
+    {code:"genetica", name:"Epilepsias genéticas", kw:["genetic epilepsy","dravet","SCN1A","developmental and epileptic encephalopathy","lennox-gastaut"]},
+    {code:"autoimune", name:"Autoimunes / inflamatórias", kw:["autoimmune epilepsy","autoimmune-associated epilepsy","rasmussen"]},
+    {code:"statusep", name:"Estado de mal epiléptico", kw:["status epilepticus"]},
+    {code:"cirurgica", name:"Cirúrgica / refratária", kw:["drug-resistant epilepsy","refractory epilepsy","epilepsy surgery","vagus nerve stimulation","responsive neurostimulation","SUDEP"]},
+   ]},
+  {code:"MOV", name:"Transtornos do Movimento",
+   kw:["parkinson","parkinsonism","parkinsonian","dystonia","dystonic","tremor","ataxia","ataxic","chorea","choreic","huntington","dyskinesia","dyskinetic","myoclonus","myoclonic","tourette","restless legs","deep brain stimulation","DBS","levodopa","dopaminergic","basal ganglia","freezing of gait","bradykinesia","substantia nigra","multiple system atrophy","MSA","progressive supranuclear palsy","PSP","corticobasal","wilson disease","botulinum","essential tremor","alpha-synuclein","synucleinopathy","nigrostriatal","hemifacial spasm","gait disorder"],
+   g:[
+    {code:"parkinson", name:"Doença de Parkinson", kw:["parkinson's disease","parkinson disease","levodopa","dopaminergic","deep brain stimulation","nigrostriatal","motor fluctuations","alpha-synuclein","synucleinopathy","bradykinesia"]},
+    {code:"atipico", name:"Parkinsonismos atípicos", kw:["multiple system atrophy","MSA","progressive supranuclear palsy","PSP","corticobasal","atypical parkinsonism"]},
+    {code:"tremor", name:"Tremores", kw:["essential tremor","tremor"]},
+    {code:"distonia", name:"Distonias", kw:["dystonia","dystonic","cervical dystonia","blepharospasm","botulinum"]},
+    {code:"coreia", name:"Coreias e Huntington", kw:["chorea","choreic","huntington","ballism"]},
+    {code:"pernas", name:"Pernas inquietas", kw:["restless legs","willis-ekbom"]},
+    {code:"ataxia", name:"Ataxias", kw:["ataxia","ataxic","spinocerebellar","friedreich"]},
+    {code:"funcional", name:"Funcionais e iatrogênicos", kw:["functional movement","psychogenic movement","tardive","drug-induced parkinsonism"]},
+   ]},
+  {code:"COG", name:"Demência e Cognição",
+   kw:["alzheimer","dementia","cognitive","cognition","amyloid","tau","tauopathy","frontotemporal","lewy bod","mild cognitive impairment","neuropsycholog","primary progressive aphasia","neurodegener","apolipoprotein","MCI"],
+   g:[
+    {code:"alzheimer", name:"Doença de Alzheimer", kw:["alzheimer","amyloid","anti-amyloid","lecanemab","donanemab","apolipoprotein"]},
+    {code:"vascular", name:"Demência vascular e mista", kw:["vascular dementia","mixed dementia"]},
+    {code:"lewy", name:"Demência com corpos de Lewy", kw:["lewy bod","dementia with lewy"]},
+    {code:"ftd", name:"Degeneração frontotemporal", kw:["frontotemporal","primary progressive aphasia","FTD"]},
+    {code:"mci", name:"Comprometimento cognitivo leve", kw:["mild cognitive impairment","MCI","subjective cognitive"]},
+    {code:"rapida", name:"Rapidamente progressivas / priônicas", kw:["rapidly progressive dementia","creutzfeldt","prion"]},
+    {code:"biomarcador", name:"Biomarcadores e neuroimagem", kw:["biomarker","plasma p-tau","amyloid PET","neurofilament","cerebrospinal fluid biomarker"]},
+   ]},
+  {code:"EMG", name:"Neuromuscular",
+   kw:["neuropathy","polyneuropathy","myopathy","myasthenia","amyotrophic lateral sclerosis","motor neuron","muscular dystrophy","guillain","CIDP","neuromuscular","nerve conduction","charcot-marie","spinal muscular atrophy","radiculopathy","peripheral nerve","ALS","myositis"],
+   g:[
+    {code:"neuropatia", name:"Neuropatias periféricas", kw:["peripheral neuropathy","polyneuropathy","diabetic neuropathy","small fiber neuropathy"]},
+    {code:"mnd", name:"Neurônio motor (ELA)", kw:["amyotrophic lateral sclerosis","ALS","motor neuron disease","primary lateral sclerosis"]},
+    {code:"jne", name:"Junção neuromuscular", kw:["myasthenia","neuromuscular junction","lambert-eaton"]},
+    {code:"miopatia", name:"Miopatias e distrofias", kw:["myopathy","muscular dystrophy","myositis","inclusion body myositis","duchenne","dystrophinopathy"]},
+    {code:"imuno", name:"Imunomediadas (GBS/CIDP)", kw:["guillain","CIDP","chronic inflammatory demyelinating polyneuropathy"]},
+    {code:"hereditaria", name:"Neuropatias hereditárias", kw:["charcot-marie","hereditary neuropathy","CMT","transthyretin amyloid","hATTR"]},
+    {code:"plexo", name:"Plexopatias e mononeuropatias", kw:["plexopathy","brachial plexus","mononeuropathy","carpal tunnel","radiculopathy"]},
+   ]},
+  {code:"DES", name:"Neuroimunologia / Desmielinizantes",
+   kw:["multiple sclerosis","demyelinat","neuromyelitis","NMOSD","MOGAD","optic neuritis","autoimmune encephalitis","neuroinflammat","oligoclonal","relapsing","disease-modifying","paraneoplastic"],
+   g:[
+    {code:"em", name:"Esclerose múltipla", kw:["multiple sclerosis","relapsing","disease-modifying","oligoclonal"]},
+    {code:"nmosd", name:"NMOSD", kw:["neuromyelitis","NMOSD","aquaporin"]},
+    {code:"mogad", name:"MOGAD", kw:["MOGAD","MOG antibody","myelin oligodendrocyte"]},
+    {code:"adem", name:"ADEM", kw:["acute disseminated encephalomyelitis","ADEM"]},
+    {code:"encefalite", name:"Encefalites autoimunes", kw:["autoimmune encephalitis","anti-NMDA","NMDA receptor","LGI1","CASPR2"]},
+    {code:"paraneo", name:"Paraneoplásicas", kw:["paraneoplastic"]},
+   ]},
+  {code:"ONC", name:"Neuro-oncologia",
+   kw:["glioma","glioblastoma","brain tumor","brain tumour","meningioma","neuro-oncolog","astrocytoma","brain metastas","CNS lymphoma","IDH-mutant","schwannoma","pituitary"],
+   g:[
+    {code:"glioma", name:"Gliomas", kw:["glioma","glioblastoma","astrocytoma","IDH-mutant","oligodendroglioma"]},
+    {code:"meningioma", name:"Meningiomas", kw:["meningioma"]},
+    {code:"metastase", name:"Metástases do SNC", kw:["brain metastas","leptomeningeal","CNS lymphoma"]},
+    {code:"nervo", name:"Tumores de nervos periféricos", kw:["schwannoma","nerve sheath tumor","neurofibroma"]},
+    {code:"base", name:"Hipofisários / base de crânio", kw:["pituitary","skull base","craniopharyngioma"]},
+    {code:"neurotox", name:"Complicações / neurotoxicidade", kw:["neurotoxicity","chemotherapy-induced","immune effector cell-associated neurotoxicity","CAR-T"]},
+   ]},
+  {code:"SON", name:"Medicina do Sono",
+   kw:["insomnia","narcolepsy","circadian","obstructive sleep apnea","sleep apnea","REM sleep","hypersomnia","parasomnia","sleep disorder","cataplexy"],
+   g:[
+    {code:"insonia", name:"Insônia", kw:["insomnia"]},
+    {code:"apneia", name:"Distúrbios respiratórios (apneia)", kw:["sleep apnea","obstructive sleep","OSA","sleep-disordered breathing"]},
+    {code:"narcolepsia", name:"Hipersonias e narcolepsia", kw:["narcolepsy","hypersomnia","cataplexy"]},
+    {code:"parassonia", name:"Parassonias (RBD)", kw:["parasomnia","REM sleep behavior","REM sleep behaviour","RBD"]},
+    {code:"circadiano", name:"Ritmo circadiano", kw:["circadian"]},
+    {code:"movsono", name:"Movimento relacionado ao sono", kw:["periodic limb movement","restless legs"]},
+   ]},
+  {code:"INF", name:"Neuroinfectologia",
+   kw:["meningitis","encephalitis","neurosyphilis","prion","creutzfeldt","neurocysticercosis","cerebral malaria","progressive multifocal","tuberculous meningitis","cryptococcal","HIV","HTLV"],
+   g:[
+    {code:"meningoenc", name:"Meningites e encefalites", kw:["meningitis","encephalitis"]},
+    {code:"viral", name:"Virais (HIV, HTLV, herpes)", kw:["HIV","HTLV","herpes simplex","viral encephalitis"]},
+    {code:"parasitaria", name:"Parasitárias", kw:["neurocysticercosis","cerebral malaria","chagas","toxoplasm"]},
+    {code:"bacteriana", name:"Bacterianas", kw:["neurosyphilis","tuberculous meningitis","neurotuberculosis","lyme"]},
+    {code:"fungica", name:"Fúngicas / oportunistas", kw:["cryptococcal","progressive multifocal","PML","fungal infection"]},
+    {code:"prion", name:"Priônicas", kw:["prion","creutzfeldt"]},
+   ]},
+  {code:"DAU", name:"Neurologia Autonômica (disautonomias)",
+   kw:["dysautonomia","autonomic failure","autonomic neuropathy","orthostatic hypotension","syncope","postural tachycardia","POTS","baroreflex","orthostatic intolerance"],
+   g:[
+    {code:"sincope", name:"Síncope e intolerância ortostática", kw:["syncope","orthostatic intolerance"]},
+    {code:"pots", name:"POTS", kw:["postural tachycardia","POTS"]},
+    {code:"falencia", name:"Falência autonômica / HO neurogênica", kw:["autonomic failure","orthostatic hypotension","neurogenic orthostatic"]},
+    {code:"periferica", name:"Disautonomias periféricas", kw:["autonomic neuropathy","small fiber autonomic"]},
+   ]},
+  {code:"NIC", name:"Neurocrítico / Neurointensivismo",
+   kw:["traumatic brain injury","intracranial pressure","neurocritical","neurointensive","brain death","coma","decompressive craniectomy","disorders of consciousness","spinal cord injury"],
+   g:[
+    {code:"tce", name:"Lesão cerebral traumática (TCE)", kw:["traumatic brain injury","TBI","head injury","concussion"]},
+    {code:"pic", name:"Hipertensão intracraniana", kw:["intracranial pressure","intracranial hypertension","decompressive craniectomy","cerebral edema","cerebral oedema"]},
+    {code:"coma", name:"Coma e prognóstico", kw:["coma","disorders of consciousness","post-cardiac arrest","hypoxic-ischemic","brain death","prognostication"]},
+    {code:"medula", name:"Lesão medular aguda", kw:["spinal cord injury","acute myelopathy"]},
+    {code:"neuromonit", name:"Neuromonitorização", kw:["neuromonitoring","multimodal monitoring"]},
+   ]},
+  {code:"RHB", name:"Neurorreabilitação",
+   kw:["rehabilitation","neurorehabilitation","spasticity","dysphagia","brain-computer interface","motor recovery","neuromodulation"],
+   g:[
+    {code:"avcrhb", name:"Reabilitação do AVC", kw:["stroke rehabilitation","post-stroke","motor recovery","upper limb recovery"]},
+    {code:"espasticidade", name:"Espasticidade", kw:["spasticity"]},
+    {code:"cognitivarhb", name:"Reabilitação cognitiva", kw:["cognitive rehabilitation"]},
+    {code:"marcha", name:"Marcha e neuromodulação", kw:["gait training","robotic rehabilitation","brain-computer interface","transcranial stimulation","exoskeleton","neuromodulation"]},
+    {code:"disfagia", name:"Disfagia e fala", kw:["dysphagia","aphasia rehabilitation","speech therapy"]},
+   ]},
+  {code:"NOF", name:"Neuro-oftalmologia",
+   kw:["optic neuritis","optic neuropathy","papilledema","papilloedema","diplopia","ophthalmoplegia","ocular motor","visual field","internuclear ophthalmoplegia"],
+   g:[
+    {code:"neuriteoptica", name:"Neurite óptica", kw:["optic neuritis"]},
+    {code:"neuropatiaoptica", name:"Neuropatias ópticas", kw:["optic neuropathy","ischemic optic","NAION","leber hereditary optic"]},
+    {code:"motilidade", name:"Motilidade ocular / diplopia", kw:["diplopia","ophthalmoplegia","ocular motor","internuclear ophthalmoplegia","third nerve palsy","sixth nerve palsy"]},
+    {code:"papiledema", name:"Papiledema / HII", kw:["papilledema","papilloedema","idiopathic intracranial hypertension","pseudotumor cerebri"]},
+    {code:"pupila", name:"Pupila e via visual", kw:["pupillary","horner","visual field","homonymous hemianopia"]},
+   ]},
+  {code:"NOT", name:"Neuro-otologia",
+   kw:["vertigo","dizziness","vestibular","nystagmus","meniere","benign paroxysmal positional","tinnitus","hearing loss"],
+   g:[
+    {code:"vertigem", name:"Vertigem e tontura", kw:["vertigo","dizziness"]},
+    {code:"bppv", name:"VPPB", kw:["benign paroxysmal positional","BPPV"]},
+    {code:"meniere", name:"Doença de Ménière", kw:["meniere"]},
+    {code:"neuritevest", name:"Neurite vestibular", kw:["vestibular neuritis","labyrinthitis"]},
+    {code:"central", name:"Vertigem central / nistagmo", kw:["nystagmus","central vertigo","downbeat","vestibular migraine"]},
+    {code:"audicao", name:"Zumbido / perda auditiva", kw:["tinnitus","hearing loss","sensorineural"]},
+   ]},
+  {code:"NGE", name:"Neurogenética",
+   kw:["repeat expansion","leukodystrophy","leukoencephalopathy","mitochondrial","inborn error","hereditary spastic paraplegia","gene therapy","antisense oligonucleotide","genotype-phenotype"],
+   g:[
+    {code:"repeticao", name:"Doenças de repetição", kw:["repeat expansion","CAG repeat","trinucleotide","myotonic dystrophy"]},
+    {code:"leuco", name:"Leucodistrofias", kw:["leukodystrophy","leukoencephalopathy"]},
+    {code:"mito", name:"Mitocondriais", kw:["mitochondrial","MELAS","mitochondrial encephalopathy"]},
+    {code:"metabolico", name:"Erros inatos do metabolismo", kw:["inborn error","lysosomal storage","metabolic disorder"]},
+    {code:"hsp", name:"Paraparesias espásticas hereditárias", kw:["hereditary spastic paraplegia","spastic paraparesis"]},
+    {code:"terapiagenica", name:"Testes genéticos / terapia gênica", kw:["gene therapy","antisense oligonucleotide","genetic testing","genotype-phenotype"]},
+   ]},
+  {code:"NPE", name:"Neuropediatria",
+   kw:["pediatric","paediatric","children","childhood","neonatal","infantile","cerebral palsy","developmental delay"],
+   g:[
+    {code:"desenvolvimento", name:"Encefalopatias do desenvolvimento", kw:["developmental encephalopathy","developmental delay","developmental and epileptic encephalopathy"]},
+    {code:"epipediatrica", name:"Epilepsias pediátricas", kw:["infantile spasms","west syndrome","childhood epilepsy","pediatric epilepsy"]},
+    {code:"pc", name:"Paralisia cerebral", kw:["cerebral palsy"]},
+    {code:"neurodes", name:"Neurodesenvolvimento", kw:["autism","attention-deficit","ADHD","neurodevelopmental disorder"]},
+    {code:"nmped", name:"Neuromusculares pediátricas", kw:["spinal muscular atrophy","SMA","duchenne"]},
+   ]},
+  {code:"GER", name:"Neurologia Geral", kw:[], g:[]},
 ];
 
 const CHAN_BY_CODE = Object.fromEntries(CHANNELS.map(c=>[c.code,c]));
 const CHAN_ORDER = Object.fromEntries(CHANNELS.map((c,i)=>[c.code,i]));
+const GROUP_NAME = {}; // "CHAN:group" -> nome legível
+for(const ch of CHANNELS) if(ch.g) for(const g of ch.g) GROUP_NAME[ch.code+":"+g.code]=g.name;
 
-// Precompile one regex per channel
+// Precompile one regex per channel and per disease group
 function reEsc(s){return s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");}
+function mkRe(kw){ return kw.length ? new RegExp("\\b(" + kw.map(reEsc).join("|") + ")\\b","i") : null; }
 for(const ch of CHANNELS){
-  ch._re = ch.kw.length ? new RegExp("\\b(" + ch.kw.map(reEsc).join("|") + ")\\b","i") : null;
+  ch._re = mkRe(ch.kw);
+  ch.g = ch.g || [];
+  for(const g of ch.g) g._re = mkRe(g.kw);
 }
 
 const MONTHS = ["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"];
@@ -389,6 +583,7 @@ const $ = s => document.querySelector(s);
 const state = {
   days: 90,
   channel: "ALL",
+  group: null,          // grupo de doenças selecionado (2º nível), dentro de um canal
   query: "",
   active: new Set(JOURNALS.map(j=>j.ta)),
   articles: [],
@@ -469,19 +664,33 @@ function fmtDate(ts){
 }
 function classify(title, hint){
   const t = (title||"").toLowerCase();
-  const scores = {}; const tags = [];
+  const scores = {}; const tags = []; const topics = [];
   for(const ch of CHANNELS){
-    if(!ch._re) continue;
-    let s = ch._re.test(t) ? 1 : 0;
+    let s = (ch._re && ch._re.test(t)) ? 1 : 0;
+    let groupHit = false;
+    for(const g of ch.g){
+      if(g._re && g._re.test(t)){
+        groupHit = true;
+        topics.push({chan:ch.code, code:g.code, name:g.name});
+      }
+    }
+    if(groupHit) s += 1;        // a specific disease group is strong evidence
     if(hint===ch.code) s += 0.6;
-    if(s>0){ scores[ch.code]=s; if(s>=1) tags.push(ch.code); }
+    if(s>0){ scores[ch.code]=s; tags.push(ch.code); }
   }
   if(!tags.length){
-    if(hint){ return {primary:hint, tags:[hint]}; }
-    return {primary:"GER", tags:["GER"]};
+    const p = hint || "GER";
+    return {primary:p, tags:[p], topics:[]};
   }
   tags.sort((a,b)=> (scores[b]-scores[a]) || (CHAN_ORDER[a]-CHAN_ORDER[b]));
-  return {primary:tags[0], tags};
+  // keep 2–3 most relevant subspecialty tags
+  const top = tags.slice(0,3);
+  // order topics by channel order, then keep them only for tagged channels
+  const tagged = new Set(top);
+  const topicList = topics
+    .filter(tp=>tagged.has(tp.chan))
+    .sort((a,b)=>(CHAN_ORDER[a.chan]-CHAN_ORDER[b.chan]));
+  return {primary:top[0], tags:top, topics:topicList};
 }
 
 function buildArticle(jta, hint, sum){
@@ -503,6 +712,7 @@ function buildArticle(jta, hint, sum){
     doi, ts,
     primary: cls.primary,
     tags: cls.tags,
+    topics: cls.topics,
   };
 }
 
@@ -626,9 +836,10 @@ function relTime(ts){
   return "em " + fmtDate(ts);
 }
 
+// channel counts são por rótulo (multi-tag): a soma pode exceder o total
 function counts(){
   const c = {}; for(const ch of CHANNELS) c[ch.code]=0;
-  for(const a of visibleBase()) c[a.primary]=(c[a.primary]||0)+1;
+  for(const a of visibleBase()) for(const code of a.tags) if(code in c) c[code]++;
   return c;
 }
 // articles passing journal + query filters (but not channel) — basis for channel counts
@@ -654,7 +865,7 @@ function renderChannels(){
     const color = code==="ALL" ? "var(--signal)" : "var(--c-"+code+")";
     const li = h("button",{class:"chan"+(active?" active":""), style:"--chan:"+color,
         "data-empty": (code!=="ALL"&&!n)?"1":null,
-        onclick:()=>{ state.channel=activeCode; renderChannels(); renderFeed(); }},
+        onclick:()=>{ state.channel=activeCode; state.group=null; renderChannels(); renderFeed(); }},
       h("span",{class:"chan__code",style:code==="ALL"?"background:var(--ink)":""}, code==="ALL"?"ALL":code),
       h("span",{class:"chan__name"}, label),
       h("span",{class:"chan__n"}, code==="ALL"? String(visibleBase().length): String(n))
@@ -662,7 +873,7 @@ function renderChannels(){
     ul.append(li);
 
     const chip = h("button",{class:"chip"+(active?" active":""), style:"--chan:"+color,
-        onclick:()=>{ state.channel=activeCode; renderChannels(); renderFeed(); }},
+        onclick:()=>{ state.channel=activeCode; state.group=null; renderChannels(); renderFeed(); }},
       h("span",{}, code==="ALL"?"Todas":code),
       h("span",{class:"n"}, code==="ALL"? String(visibleBase().length): String(n))
     );
@@ -695,8 +906,18 @@ function articleCard(a){
     h("span",{class:"card__date"}, fmtDate(a.ts))
   );
   const foot = h("div",{class:"card__foot"});
-  for(const tg of a.tags.slice(0,3))
-    foot.append(h("span",{class:"tag", style:"--chan:var(--c-"+tg+")"}, tg));
+  // grupos de doenças (2º nível), com o nome legível
+  const topics = (a.topics||[]).slice(0,3);
+  for(const tp of topics)
+    foot.append(h("span",{class:"tag", style:"--chan:var(--c-"+tp.chan+")", title:CHAN_BY_CODE[tp.chan]?CHAN_BY_CODE[tp.chan].name:tp.chan}, tp.name));
+  // subespecialidades extras (overlap) que ainda não apareceram via um grupo
+  const shownChans = new Set(topics.map(t=>t.chan));
+  for(const tg of a.tags){
+    if(tg===a.primary && topics.length) continue;
+    if(shownChans.has(tg)) continue;
+    foot.append(h("span",{class:"tag tag--code", style:"--chan:var(--c-"+tg+")", title:CHAN_BY_CODE[tg]?CHAN_BY_CODE[tg].name:tg}, tg));
+    shownChans.add(tg);
+  }
   foot.append(h("span",{class:"spacer"}));
   const copyBtn = h("button",{class:"iconbtn", title:"Copiar referência",
     onclick:e=>{
@@ -717,12 +938,33 @@ function articleCard(a){
   );
 }
 
+// Barra de grupos de doenças (2º nível) para o canal selecionado.
+function renderSubnav(chan, taggedList){
+  const nav=$("#subnav"); nav.innerHTML="";
+  if(chan==="ALL"){ return; }
+  const ch = CHAN_BY_CODE[chan]; if(!ch || !ch.g.length) return;
+  const color="var(--c-"+chan+")";
+  // contagem por grupo
+  const gcount={};
+  for(const a of taggedList) for(const tp of (a.topics||[])) if(tp.chan===chan) gcount[tp.code]=(gcount[tp.code]||0)+1;
+
+  const mk=(code,label,n)=>{
+    const active = state.group===code;
+    return h("button",{class:"schip"+(active?" active":""), style:"--chan:"+color,
+      onclick:()=>{ state.group = (state.group===code? null : code); renderFeed(); }},
+      label, h("span",{class:"n"}, String(n)));
+  };
+  nav.append(mk(null,"Todos",taggedList.length));
+  for(const g of ch.g){ const n=gcount[g.code]||0; if(n) nav.append(mk(g.code,g.name,n)); }
+}
+
 function renderFeed(){
   const feed=$("#feed"); feed.innerHTML="";
-  const base = visibleBase();
 
-  if(!state.articles.length){ return; } // handled by skeleton/error/initial
+  if(!state.articles.length){ $("#subnav").innerHTML=""; return; } // skeleton/error/initial
+  const base = visibleBase();
   if(!base.length){
+    $("#subnav").innerHTML="";
     feed.append(h("div",{class:"state"},
       h("h2",{},"Nada nesta seleção"),
       h("p",{},"Ajuste a busca ou reative periódicos no filtro à esquerda.")));
@@ -730,19 +972,66 @@ function renderFeed(){
   }
 
   if(state.channel!=="ALL"){
-    const list = base.filter(a=>a.primary===state.channel);
-    if(!list.length){
+    const chan = state.channel;
+    const ch = CHAN_BY_CODE[chan];
+    // multi-tag: artigos rotulados com este canal (não só os de primário)
+    const tagged = base.filter(a=>a.tags.includes(chan));
+    renderSubnav(chan, tagged);
+
+    if(!tagged.length){
       feed.append(h("div",{class:"state"},
-        h("h2",{},"Sem novidades em " + CHAN_BY_CODE[state.channel].name),
+        h("h2",{},"Sem novidades em " + ch.name),
         h("p",{},"Nenhum artigo desta subespecialidade na janela atual. Tente ampliar para 180 dias.")));
       return;
     }
-    const wrap=h("div",{class:"cards"}); list.forEach(a=>wrap.append(articleCard(a)));
-    feed.append(wrap);
+
+    // grupo de doenças selecionado -> lista plana
+    if(state.group){
+      const gname = GROUP_NAME[chan+":"+state.group] || state.group;
+      const list = tagged.filter(a=>(a.topics||[]).some(tp=>tp.chan===chan && tp.code===state.group));
+      if(!list.length){
+        feed.append(h("div",{class:"state"},
+          h("h2",{},"Sem artigos em " + gname),
+          h("p",{},"Tente outro grupo de doenças ou amplie a janela.")));
+        return;
+      }
+      const wrap=h("div",{class:"cards"}); list.forEach(a=>wrap.append(articleCard(a)));
+      feed.append(wrap);
+      return;
+    }
+
+    // sem grupo -> seções por grupo de doenças (+ "Outros" para os não classificados)
+    const color="var(--c-"+chan+")";
+    const seen = new Set();
+    for(const g of ch.g){
+      const list = tagged.filter(a=>(a.topics||[]).some(tp=>tp.chan===chan && tp.code===g.code));
+      if(!list.length) continue;
+      list.forEach(a=>seen.add(a.pmid));
+      const sub=h("section",{class:"subsec", style:"--chan:"+color},
+        h("div",{class:"subsec__head"},
+          h("span",{class:"subsec__dot"}),
+          h("span",{class:"subsec__title"}, g.name),
+          h("span",{class:"subsec__n"}, list.length + (list.length===1?" artigo":" artigos"))
+        ));
+      const wrap=h("div",{class:"cards"}); list.forEach(a=>wrap.append(articleCard(a)));
+      sub.append(wrap); feed.append(sub);
+    }
+    const outros = tagged.filter(a=>!seen.has(a.pmid));
+    if(outros.length){
+      const sub=h("section",{class:"subsec", style:"--chan:"+color},
+        h("div",{class:"subsec__head"},
+          h("span",{class:"subsec__dot"}),
+          h("span",{class:"subsec__title"}, ch.g.length? "Outros / geral" : ch.name),
+          h("span",{class:"subsec__n"}, outros.length + (outros.length===1?" artigo":" artigos"))
+        ));
+      const wrap=h("div",{class:"cards"}); outros.forEach(a=>wrap.append(articleCard(a)));
+      sub.append(wrap); feed.append(sub);
+    }
     return;
   }
 
-  // grouped by primary subspecialty, in channel order
+  // ALL: agrupado por subespecialidade (primário), em ordem de canal
+  $("#subnav").innerHTML="";
   const groups = {};
   for(const a of base){ (groups[a.primary]||(groups[a.primary]=[])).push(a); }
   for(const ch of CHANNELS){
@@ -788,7 +1077,7 @@ function init(){
 
   $("#window").addEventListener("change", e=>{
     state.days=+e.target.value; store.set(STORE+":days", e.target.value);
-    state.channel="ALL"; loadAll(false);
+    state.channel="ALL"; state.group=null; loadAll(false);
   });
   $("#q").addEventListener("input", e=>{ state.query=e.target.value.trim(); renderChannels(); renderFeed(); });
   $("#refresh").addEventListener("click", ()=>loadAll(true));
