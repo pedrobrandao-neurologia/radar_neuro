@@ -1,0 +1,824 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Radar Neuro — Atualizações em Neurologia e Transtornos do Movimento</title>
+<meta name="description" content="Feed automático dos principais periódicos de neurologia e transtornos do movimento, organizado por subespecialidade. Roda inteiramente no navegador, sem servidor.">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0C726F">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Radar Neuro">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#F4F6F8;
+  --surface:#FFFFFF;
+  --ink:#0F1620;
+  --ink-soft:#5C6873;
+  --ink-faint:#8A949E;
+  --line:#E5E9ED;
+  --line-strong:#CFD6DC;
+  --signal:#0C726F;
+  --signal-bright:#13A39C;
+  --signal-wash:#E7F3F2;
+  --danger:#B23A2E;
+  --radius:10px;
+  --maxw:1240px;
+  --c-MOV:#2E7D5B; --c-COG:#7A4E97; --c-AVC:#BC4530; --c-EPI:#C2871C;
+  --c-DES:#2272A0; --c-EMG:#4E5DAE; --c-CEF:#AE4E74; --c-SON:#2F8585;
+  --c-ONC:#6B7A2A; --c-INF:#9A6536; --c-GER:#56636E;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--paper);
+  color:var(--ink);
+  font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:15px;line-height:1.5;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+}
+a{color:inherit}
+button{font-family:inherit;cursor:pointer}
+.mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+
+/* ---------- Masthead ---------- */
+.masthead{
+  border-bottom:1px solid var(--line-strong);
+  background:linear-gradient(180deg,#FFFFFF, #FBFCFD);
+  position:sticky;top:0;z-index:30;
+}
+.masthead__inner{max-width:var(--maxw);margin:0 auto;padding:18px 22px 14px}
+.brandline{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.eyebrow{
+  font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.22em;
+  text-transform:uppercase;color:var(--signal);font-weight:500;
+}
+.brand{
+  font-family:Archivo,sans-serif;font-weight:800;letter-spacing:-.02em;
+  font-size:clamp(22px,3.4vw,30px);line-height:1;margin:2px 0 0;
+  display:flex;align-items:center;gap:12px;
+}
+.brand .pulse{
+  width:9px;height:9px;border-radius:50%;background:var(--ink-faint);flex:none;
+  box-shadow:0 0 0 0 rgba(19,163,156,.5);
+}
+.brand .pulse.live{background:var(--signal-bright);animation:beat 1.4s ease-out infinite}
+@keyframes beat{0%{box-shadow:0 0 0 0 rgba(19,163,156,.5)}70%{box-shadow:0 0 0 9px rgba(19,163,156,0)}100%{box-shadow:0 0 0 0 rgba(19,163,156,0)}}
+.subtitle{color:var(--ink-soft);font-size:14px;max-width:62ch;margin:8px 0 0}
+
+.controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}
+.field{display:flex;align-items:center;gap:8px;background:var(--surface);
+  border:1px solid var(--line-strong);border-radius:8px;padding:7px 10px}
+.field label{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);font-weight:600}
+.field select,.search input{border:0;background:transparent;color:var(--ink);font:inherit;outline:none}
+.search{flex:1 1 240px;min-width:200px}
+.search input{width:100%}
+.btn{
+  border:1px solid var(--signal);background:var(--signal);color:#fff;
+  border-radius:8px;padding:9px 16px;font-weight:600;font-size:14px;
+  display:inline-flex;align-items:center;gap:8px;transition:filter .15s,opacity .15s;
+}
+.btn:hover{filter:brightness(1.08)}
+.btn:disabled{opacity:.5;cursor:progress}
+.btn--ghost{background:transparent;color:var(--signal);border-color:var(--line-strong)}
+.btn--ghost:hover{background:var(--signal-wash);filter:none}
+.btn .spin{width:14px;height:14px;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:none}
+.btn.loading .spin{display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.statusbar{max-width:var(--maxw);margin:0 auto;padding:0 22px}
+.statusline{
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-soft);
+  border-top:1px dashed var(--line);padding:9px 0 0;margin-top:14px;
+}
+.statusline .dot{color:var(--line-strong)}
+.statusline b{color:var(--ink);font-weight:500}
+.st-sync{color:var(--signal);font-weight:500}
+.st-sync:empty{display:none}
+.progress{height:2px;background:var(--line);border-radius:2px;overflow:hidden;margin:9px 0 0;display:none}
+.progress.on{display:block}
+.progress > i{display:block;height:100%;width:0;background:var(--signal-bright);transition:width .3s ease}
+
+/* ---------- Layout ---------- */
+.layout{max-width:var(--maxw);margin:0 auto;padding:22px;display:grid;
+  grid-template-columns:248px 1fr;gap:26px;align-items:start}
+.rail{position:sticky;top:140px}
+.rail__head{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-faint);margin:0 0 8px;font-weight:500}
+.channels{list-style:none;margin:0 0 22px;padding:0;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);overflow:hidden}
+.chan{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  background:transparent;border:0;border-left:3px solid transparent;
+  padding:9px 12px 9px 11px;border-bottom:1px solid var(--line);transition:background .12s}
+.chan:last-child{border-bottom:0}
+.chan:hover{background:#F8FAFB}
+.chan.active{background:var(--signal-wash);border-left-color:var(--chan,var(--signal))}
+.chan.active .chan__name{color:var(--ink);font-weight:600}
+.chan__code{font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:500;color:#fff;
+  background:var(--chan,#888);border-radius:4px;padding:2px 5px;min-width:38px;text-align:center;flex:none}
+.chan__name{flex:1;font-size:13.5px;color:var(--ink-soft);line-height:1.25}
+.chan__n{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-faint)}
+.chan[data-empty="1"]{opacity:.4}
+
+.filterbox{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
+.filterbox summary{list-style:none;cursor:pointer;padding:10px 12px;font-size:12px;
+  font-family:"IBM Plex Mono",monospace;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink-soft);display:flex;justify-content:space-between;align-items:center}
+.filterbox summary::-webkit-details-marker{display:none}
+.filterbox summary .chev{transition:transform .2s;color:var(--ink-faint)}
+.filterbox[open] summary .chev{transform:rotate(90deg)}
+.jrnls{padding:4px 12px 12px;max-height:340px;overflow:auto}
+.jrow{display:flex;align-items:flex-start;gap:8px;padding:5px 0;font-size:12.5px;color:var(--ink-soft);border-top:1px solid var(--line)}
+.jrow:first-child{border-top:0}
+.jrow input{margin-top:3px;accent-color:var(--signal)}
+.jrow .ta{font-family:"IBM Plex Mono",monospace;color:var(--ink);font-size:11.5px;display:block}
+.jbulk{display:flex;gap:14px;padding:8px 12px;border-top:1px solid var(--line)}
+.jbulk button{background:none;border:0;color:var(--signal);font-size:12px;font-weight:600;padding:0}
+
+.settings{margin-top:14px}
+.settings input[type=password]{width:100%;border:1px solid var(--line-strong);border-radius:6px;
+  padding:7px 9px;font:inherit;font-size:12.5px;margin-top:6px}
+.settings .hint{font-size:11.5px;color:var(--ink-faint);margin:6px 0 0;line-height:1.4}
+.settings .hint a{color:var(--signal)}
+
+/* ---------- Feed ---------- */
+.feed{min-width:0}
+.section{margin:0 0 30px}
+.section__head{display:flex;align-items:baseline;gap:12px;margin:0 0 12px;
+  padding-bottom:8px;border-bottom:2px solid var(--chan,var(--line-strong))}
+.section__code{font-family:"IBM Plex Mono",monospace;font-size:12px;font-weight:500;color:#fff;
+  background:var(--chan,#888);border-radius:4px;padding:2px 7px}
+.section__title{font-family:Archivo,sans-serif;font-weight:700;font-size:18px;letter-spacing:-.01em}
+.section__n{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-faint);margin-left:auto}
+
+.cards{display:grid;gap:12px}
+.card{position:relative;background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--radius);border-left:4px solid var(--chan,var(--line-strong));
+  padding:14px 16px;transition:box-shadow .15s,transform .15s}
+.card:hover{box-shadow:0 4px 18px -10px rgba(15,22,32,.35)}
+.card__top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.card__ta{font-family:"IBM Plex Mono",monospace;font-size:11.5px;font-weight:500;color:var(--signal);
+  background:var(--signal-wash);border-radius:4px;padding:2px 7px;white-space:nowrap}
+.card__date{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--ink-faint)}
+.card__title{font-size:15.5px;font-weight:600;line-height:1.38;margin:2px 0 6px;color:var(--ink)}
+.card__authors{font-size:12.5px;color:var(--ink-soft);margin:0 0 10px}
+.card__foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tag{font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.04em;
+  color:var(--chan,#666);border:1px solid var(--chan,#ccc);border-radius:4px;padding:1px 5px;opacity:.9}
+.spacer{flex:1}
+.lnk{font-size:12px;font-weight:600;color:var(--signal);text-decoration:none;
+  border:1px solid var(--line-strong);border-radius:6px;padding:4px 10px;transition:background .12s}
+.lnk:hover{background:var(--signal-wash)}
+.lnk--mute{color:var(--ink-soft);border-color:var(--line)}
+.iconbtn{font-size:12px;color:var(--ink-soft);background:none;border:1px solid var(--line);
+  border-radius:6px;padding:4px 9px}
+.iconbtn:hover{background:#F6F8F9;color:var(--ink)}
+.iconbtn.copied{color:var(--signal);border-color:var(--signal)}
+
+/* ---------- States ---------- */
+.state{text-align:center;padding:60px 20px;color:var(--ink-soft)}
+.state h2{font-family:Archivo,sans-serif;font-weight:700;color:var(--ink);font-size:20px;margin:0 0 8px}
+.state p{max-width:46ch;margin:0 auto 18px}
+.banner{display:none;align-items:center;gap:10px;background:#FFF6E9;border:1px solid #F0D9AE;
+  color:#8A5A12;border-radius:8px;padding:10px 14px;margin:0 0 18px;font-size:13px}
+.banner.on{display:flex}
+.skel{height:96px;border-radius:var(--radius);background:linear-gradient(90deg,#eef1f3,#f6f8f9,#eef1f3);
+  background-size:200% 100%;animation:sh 1.3s linear infinite;border-left:4px solid var(--line)}
+@keyframes sh{to{background-position:-200% 0}}
+
+/* ---------- Footer ---------- */
+footer{max-width:var(--maxw);margin:0 auto;padding:26px 22px 50px;color:var(--ink-faint);font-size:12.5px;
+  border-top:1px solid var(--line);line-height:1.6}
+footer a{color:var(--signal)}
+footer code{font-family:"IBM Plex Mono",monospace;background:#EEF2F4;padding:1px 5px;border-radius:4px;font-size:11.5px}
+
+/* mobile channels as chips */
+.chips{display:none}
+@media(max-width:900px){
+  .layout{grid-template-columns:1fr;gap:16px}
+  .rail{position:static}
+  .channels{display:none}
+  .chips{display:flex;gap:8px;overflow-x:auto;padding:4px 2px 8px;margin:-4px 0 4px;-webkit-overflow-scrolling:touch}
+  .chip{flex:none;display:flex;align-items:center;gap:7px;background:var(--surface);
+    border:1px solid var(--line-strong);border-radius:999px;padding:6px 12px;font-size:13px;color:var(--ink-soft);white-space:nowrap}
+  .chip.active{background:var(--chan,var(--signal));color:#fff;border-color:transparent}
+  .chip .n{font-family:"IBM Plex Mono",monospace;font-size:11px;opacity:.8}
+  .rail__head{display:none}
+}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+:focus-visible{outline:2px solid var(--signal-bright);outline-offset:2px;border-radius:4px}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <div class="masthead__inner">
+    <div class="brandline">
+      <div>
+        <div class="eyebrow">Vigilância da literatura</div>
+        <h1 class="brand"><span class="pulse" id="pulse"></span>Radar Neuro</h1>
+      </div>
+    </div>
+    <p class="subtitle">Feed automático dos principais periódicos de neurologia e transtornos do movimento do mundo, classificado por subespecialidade. Roda inteiramente no seu navegador — sem servidor, sem cadastro.</p>
+    <div class="controls">
+      <div class="field">
+        <label for="window">Janela</label>
+        <select id="window">
+          <option value="30">30 dias</option>
+          <option value="60">60 dias</option>
+          <option value="90" selected>90 dias</option>
+          <option value="180">180 dias</option>
+        </select>
+      </div>
+      <div class="field search">
+        <label for="q" style="flex:none">Buscar</label>
+        <input id="q" type="search" placeholder="título, autor, periódico…" autocomplete="off">
+      </div>
+      <button class="btn" id="refresh"><span class="spin"></span><span id="refreshLabel">Atualizar</span></button>
+      <button class="btn btn--ghost" id="install" hidden>Instalar app</button>
+    </div>
+  </div>
+  <div class="statusbar">
+    <div class="statusline">
+      <span id="st-sync" class="st-sync"></span>
+      <span id="st-stats" class="st-stats"></span>
+    </div>
+    <div class="progress" id="prog"><i></i></div>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="rail">
+    <div class="rail__head">Subespecialidades</div>
+    <ul class="channels" id="channels"></ul>
+
+    <details class="filterbox" id="jbox">
+      <summary>Periódicos <span class="chev">›</span></summary>
+      <div class="jrnls" id="jrnls"></div>
+      <div class="jbulk">
+        <button id="jall">Todos</button>
+        <button id="jnone">Nenhum</button>
+      </div>
+    </details>
+
+    <details class="filterbox settings">
+      <summary>Configurações <span class="chev">›</span></summary>
+      <div style="padding:10px 12px 14px">
+        <label for="apikey" style="font-size:12px;color:var(--ink-soft);font-weight:600">Chave NCBI (opcional)</label>
+        <input id="apikey" type="password" placeholder="cole sua API key do NCBI" autocomplete="off">
+        <p class="hint">Sem chave o app já funciona. Uma chave gratuita acelera a busca (de 3 para 10 consultas/s). Gere em <a href="https://www.ncbi.nlm.nih.gov/account/settings/" target="_blank" rel="noopener">conta NCBI → API Key</a>. Fica salva apenas neste navegador.</p>
+      </div>
+    </details>
+  </aside>
+
+  <section class="feed">
+    <div class="chips" id="chips"></div>
+    <div class="banner" id="banner"><span id="bannerText"></span></div>
+    <div id="feed"></div>
+  </section>
+</div>
+
+<footer>
+  <strong>Fonte:</strong> PubMed via <a href="https://www.ncbi.nlm.nih.gov/books/NBK25501/" target="_blank" rel="noopener">NCBI E-utilities</a>. Cada periódico é consultado por sua abreviação NLM (campo <code>[ta]</code>); os artigos são ordenados por data e classificados por subespecialidade a partir do título.<br>
+  Aplicativo estático: todo o processamento ocorre no navegador. Para hospedar, basta publicar este <code>index.html</code> no GitHub Pages. A classificação por subespecialidade é heurística e serve para triagem rápida, não substitui a leitura do artigo.<br>
+  <strong>Instalar no celular:</strong> Android/Chrome mostra o botão <em>Instalar app</em> acima. No iPhone, abra no Safari e use <em>Compartilhar → Adicionar à Tela de Início</em>.
+</footer>
+
+<script>
+"use strict";
+
+/* ============================ Config ============================ */
+const EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/";
+const PROXIES = [
+  u => u,
+  u => "https://corsproxy.io/?url=" + encodeURIComponent(u),
+  u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u),
+  u => "https://api.codetabs.com/v1/proxy/?quest=" + encodeURIComponent(u),
+];
+const CACHE_TTL = 6 * 3600 * 1000; // 6 h
+const STORE = "radarneuro.v1";
+
+const JOURNALS = [
+  {ta:"Lancet Neurol", name:"The Lancet Neurology", hint:null},
+  {ta:"Nat Rev Neurol", name:"Nature Reviews Neurology", hint:null},
+  {ta:"JAMA Neurol", name:"JAMA Neurology", hint:null},
+  {ta:"Brain", name:"Brain", hint:null},
+  {ta:"Ann Neurol", name:"Annals of Neurology", hint:null},
+  {ta:"Neurology", name:"Neurology", hint:null},
+  {ta:"J Neurol Neurosurg Psychiatry", name:"J Neurol Neurosurg Psychiatry (JNNP)", hint:null},
+  {ta:"Eur J Neurol", name:"European Journal of Neurology", hint:null},
+  {ta:"Ann Clin Transl Neurol", name:"Annals of Clinical & Translational Neurology", hint:null},
+  {ta:"Brain Commun", name:"Brain Communications", hint:null},
+  {ta:"Mov Disord", name:"Movement Disorders", hint:"MOV"},
+  {ta:"Mov Disord Clin Pract", name:"Movement Disorders Clinical Practice", hint:"MOV"},
+  {ta:"Parkinsonism Relat Disord", name:"Parkinsonism & Related Disorders", hint:"MOV"},
+  {ta:"J Parkinsons Dis", name:"Journal of Parkinson's Disease", hint:"MOV"},
+  {ta:"NPJ Parkinsons Dis", name:"npj Parkinson's Disease", hint:"MOV"},
+  {ta:"Alzheimers Dement", name:"Alzheimer's & Dementia", hint:"COG"},
+  {ta:"Epilepsia", name:"Epilepsia", hint:"EPI"},
+  {ta:"Stroke", name:"Stroke", hint:"AVC"},
+  {ta:"Mult Scler", name:"Multiple Sclerosis Journal", hint:"DES"},
+  {ta:"Cephalalgia", name:"Cephalalgia", hint:"CEF"},
+];
+
+const CHANNELS = [
+  {code:"MOV", name:"Transtornos do Movimento", kw:["parkinson","parkinsonism","parkinsonian","dystonia","dystonic","tremor","ataxia","ataxic","chorea","choreic","huntington","dyskinesia","dyskinetic","myoclonus","myoclonic","tourette","restless legs","deep brain stimulation","DBS","levodopa","dopaminergic","basal ganglia","freezing of gait","bradykinesia","substantia nigra","multiple system atrophy","MSA","progressive supranuclear palsy","PSP","corticobasal","wilson disease","botulinum","essential tremor","alpha-synuclein","synucleinopathy","nigrostriatal","hemifacial spasm","spasticity","gait disorder"]},
+  {code:"COG", name:"Demência e Cognição", kw:["alzheimer","dementia","cognitive","cognition","amyloid","tau","tauopathy","frontotemporal","lewy bod","mild cognitive impairment","neuropsycholog","primary progressive aphasia","neurodegener","apolipoprotein","MCI"]},
+  {code:"AVC", name:"Cerebrovascular / AVC", kw:["stroke","ischemic","ischaemic","hemorrhage","haemorrhage","thrombectomy","thrombolysis","cerebrovascular","carotid","aneurysm","intracerebral","subarachnoid","alteplase","tenecteplase","vascular dementia","small vessel disease","recanalization","transient ischemic attack","moyamoya"]},
+  {code:"EPI", name:"Epilepsia", kw:["epilep","seizure","convuls","status epilepticus","antiseizure","antiepileptic","EEG","temporal lobe","SUDEP","ictal","interictal"]},
+  {code:"DES", name:"Neuroimunologia / EM", kw:["multiple sclerosis","demyelinat","neuromyelitis","NMOSD","MOGAD","optic neuritis","autoimmune encephalitis","neuroinflammat","oligoclonal","relapsing","disease-modifying"]},
+  {code:"EMG", name:"Neuromuscular", kw:["neuropathy","polyneuropathy","myopathy","myasthenia","amyotrophic lateral sclerosis","motor neuron","muscular dystrophy","guillain","CIDP","neuromuscular","nerve conduction","charcot-marie","spinal muscular atrophy","radiculopathy","peripheral nerve","ALS"]},
+  {code:"CEF", name:"Cefaleia e Dor", kw:["headache","migraine","cephalalgia","CGRP","cluster headache","trigeminal neuralgia","medication overuse"]},
+  {code:"SON", name:"Sono", kw:["insomnia","narcolepsy","circadian","obstructive sleep apnea","REM sleep","hypersomnia","parasomnia","sleep disorder"]},
+  {code:"ONC", name:"Neuro-oncologia", kw:["glioma","glioblastoma","brain tumor","brain tumour","meningioma","neuro-oncolog","astrocytoma","brain metastas","CNS lymphoma","IDH-mutant"]},
+  {code:"INF", name:"Neuroinfecção", kw:["meningitis","encephalitis","neurosyphilis","prion","creutzfeldt","neurocysticercosis","cerebral malaria","progressive multifocal"]},
+  {code:"GER", name:"Neurologia Geral", kw:[]},
+];
+
+const CHAN_BY_CODE = Object.fromEntries(CHANNELS.map(c=>[c.code,c]));
+const CHAN_ORDER = Object.fromEntries(CHANNELS.map((c,i)=>[c.code,i]));
+
+// Precompile one regex per channel
+function reEsc(s){return s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");}
+for(const ch of CHANNELS){
+  ch._re = ch.kw.length ? new RegExp("\\b(" + ch.kw.map(reEsc).join("|") + ")\\b","i") : null;
+}
+
+const MONTHS = ["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"];
+
+/* ============================ Safe storage ============================ */
+const store = (()=>{
+  let mem = {};
+  let ok = false;
+  try{ const k="__t"; localStorage.setItem(k,"1"); localStorage.removeItem(k); ok=true; }catch(e){ ok=false; }
+  return {
+    get(k){ try{ return ok ? localStorage.getItem(k) : (mem[k]??null); }catch(e){ return mem[k]??null; } },
+    set(k,v){ try{ ok ? localStorage.setItem(k,v) : (mem[k]=v); }catch(e){ mem[k]=v; } },
+  };
+})();
+
+/* ============================ DOM helper ============================ */
+function h(tag, attrs, ...kids){
+  const e = document.createElement(tag);
+  if(attrs) for(const k in attrs){
+    const v = attrs[k];
+    if(v==null||v===false) continue;
+    if(k==="class") e.className=v;
+    else if(k==="text") e.textContent=v;
+    else if(k==="style") e.setAttribute("style",v);
+    else if(k.slice(0,2)==="on" && typeof v==="function") e.addEventListener(k.slice(2),v);
+    else if(v===true) e.setAttribute(k,"");
+    else e.setAttribute(k,v);
+  }
+  for(const kid of kids.flat()){
+    if(kid==null||kid===false) continue;
+    e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return e;
+}
+const $ = s => document.querySelector(s);
+
+/* ============================ State ============================ */
+const state = {
+  days: 90,
+  channel: "ALL",
+  query: "",
+  active: new Set(JOURNALS.map(j=>j.ta)),
+  articles: [],
+  loaded: 0,
+  total: JOURNALS.length,
+  ts: 0,
+  loading: false,
+};
+
+/* ============================ Networking ============================ */
+function apiKey(){ return ($("#apikey").value || store.get(STORE+":key") || "").trim(); }
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+
+async function fetchJSON(url){
+  let lastErr;
+  for(const wrap of PROXIES){
+    try{
+      const r = await fetch(wrap(url), {headers:{Accept:"application/json"}});
+      if(!r.ok){ lastErr = new Error("HTTP "+r.status); continue; }
+      const txt = await r.text();
+      return JSON.parse(txt);
+    }catch(e){ lastErr = e; }
+  }
+  throw lastErr || new Error("network");
+}
+
+function esearchURL(ta, days, sort){
+  const term = '"' + ta + '"[ta]';
+  let u = EUTILS + "esearch.fcgi?db=pubmed&retmode=json&retmax=30&datetype=pdat&reldate=" + days +
+          (sort ? "&sort=pub_date" : "") + "&term=" + encodeURIComponent(term);
+  const k = apiKey(); if(k) u += "&api_key=" + encodeURIComponent(k);
+  return u;
+}
+
+async function esearchJournal(j, days){
+  for(const sort of [true,false]){           // try sorted; fall back to unsorted on error
+    try{
+      const data = await fetchJSON(esearchURL(j.ta, days, sort));
+      const r = data && data.esearchresult;
+      if(r && r.idlist) return r.idlist;
+      if(r && r.ERROR && sort) continue;       // bad sort param -> retry unsorted
+    }catch(e){ if(sort) continue; }
+  }
+  return null;
+}
+
+async function esummaryBatch(ids){
+  let u = EUTILS + "esummary.fcgi?db=pubmed&retmode=json&id=" + ids.join(",");
+  const k = apiKey(); if(k) u += "&api_key=" + encodeURIComponent(k);
+  const data = await fetchJSON(u);
+  return (data && data.result) || {};
+}
+
+/* ============================ Parsing & classify ============================ */
+function decodeTitle(raw){
+  if(!raw) return "";
+  const d = document.createElement("div");
+  d.innerHTML = String(raw);
+  return (d.textContent || "").replace(/\s+/g," ").trim().replace(/\.$/,"");
+}
+function fmtAuthors(arr){
+  if(!arr || !arr.length) return "";
+  const names = arr.filter(a=>a.authtype==="Author"&&a.name).map(a=>a.name);
+  if(!names.length) return "";
+  if(names.length<=2) return names.join(", ");
+  return names[0] + " et al.";
+}
+function parseDate(s){
+  if(!s) return 0;
+  const m = String(s).match(/(\d{4})\/(\d{2})\/(\d{2})/);
+  if(m) return Date.UTC(+m[1], +m[2]-1, +m[3]);
+  const d = Date.parse(s); return isNaN(d)?0:d;
+}
+function fmtDate(ts){
+  if(!ts) return "—";
+  const d = new Date(ts);
+  return String(d.getUTCDate()).padStart(2,"0") + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCFullYear();
+}
+function classify(title, hint){
+  const t = (title||"").toLowerCase();
+  const scores = {}; const tags = [];
+  for(const ch of CHANNELS){
+    if(!ch._re) continue;
+    let s = ch._re.test(t) ? 1 : 0;
+    if(hint===ch.code) s += 0.6;
+    if(s>0){ scores[ch.code]=s; if(s>=1) tags.push(ch.code); }
+  }
+  if(!tags.length){
+    if(hint){ return {primary:hint, tags:[hint]}; }
+    return {primary:"GER", tags:["GER"]};
+  }
+  tags.sort((a,b)=> (scores[b]-scores[a]) || (CHAN_ORDER[a]-CHAN_ORDER[b]));
+  return {primary:tags[0], tags};
+}
+
+function buildArticle(jta, hint, sum){
+  if(!sum || !sum.uid) return null;
+  const title = decodeTitle(sum.title);
+  if(!title) return null;
+  let doi = "";
+  if(Array.isArray(sum.articleids))
+    for(const a of sum.articleids){ if(a.idtype==="doi"){ doi=a.value; break; } }
+  const ts = parseDate(sum.sortpubdate || sum.epubdate || sum.pubdate);
+  const cls = classify(title, hint);
+  return {
+    pmid: sum.uid,
+    title,
+    jta,
+    journal: sum.fulljournalname || jta,
+    authors: fmtAuthors(sum.authors),
+    year: (sum.sortpubdate||"").slice(0,4) || (sum.pubdate||"").slice(0,4),
+    doi, ts,
+    primary: cls.primary,
+    tags: cls.tags,
+  };
+}
+
+/* ============================ Load orchestration ============================ */
+async function loadAll(force){
+  if(state.loading) return;
+  // cache
+  if(!force){
+    try{
+      const c = JSON.parse(store.get(STORE+":data:"+state.days) || "null");
+      if(c && c.articles && (Date.now()-c.ts) < CACHE_TTL){
+        state.articles=c.articles; state.ts=c.ts; state.loaded=c.loaded; state.total=c.total;
+        renderAll(); setSync(""); return;
+      }
+    }catch(e){}
+  }
+
+  state.loading = true; setBanner("");
+  const btn=$("#refresh"); btn.classList.add("loading"); btn.disabled=true;
+  $("#refreshLabel").textContent="Sincronizando…";
+  $("#pulse").classList.add("live");
+  $("#prog").classList.add("on");
+  showSkeletons();
+
+  const k = apiKey();
+  const chunk = k ? 8 : 3;
+  const gap = k ? 220 : 1100;
+  const idToJ = {}; const idSet = [];
+  let ok=0, fail=0, done=0;
+
+  try{
+    for(let i=0;i<JOURNALS.length;i+=chunk){
+      const part = JOURNALS.slice(i,i+chunk);
+      const res = await Promise.all(part.map(j=>esearchJournal(j, state.days)));
+      res.forEach((ids,idx)=>{
+        const j=part[idx]; done++;
+        if(ids===null){ fail++; return; }
+        ok++;
+        for(const id of ids){ if(!idToJ[id]){ idToJ[id]=j; idSet.push(id); } }
+      });
+      setSync("Consultando periódicos… " + done + "/" + JOURNALS.length);
+      setProgress(done/(JOURNALS.length+1));
+      if(i+chunk<JOURNALS.length) await sleep(gap);
+    }
+
+    if(!ok) throw new Error("Nenhum periódico respondeu.");
+
+    setSync("Carregando artigos…");
+    const summaries = {};
+    for(let i=0;i<idSet.length;i+=100){
+      const batch = idSet.slice(i,i+100);
+      Object.assign(summaries, await esummaryBatch(batch));
+      if(i+100<idSet.length) await sleep(gap);
+    }
+    setProgress(1);
+
+    const arts = [];
+    for(const id of idSet){
+      const sum = summaries[id];
+      const j = idToJ[id];
+      const a = sum && j ? buildArticle(j.ta, j.hint, sum) : null;
+      if(a) arts.push(a);
+    }
+    arts.sort((a,b)=> b.ts - a.ts);
+
+    state.articles = arts; state.loaded = ok; state.total = JOURNALS.length; state.ts = Date.now();
+    try{ store.set(STORE+":data:"+state.days, JSON.stringify({ts:state.ts,loaded:ok,total:JOURNALS.length,articles:arts})); }catch(e){}
+
+    if(fail) setBanner(fail + " periódico(s) não responderam nesta sincronização; os demais foram carregados.");
+    renderAll();
+  }catch(err){
+    // try stale cache as fallback
+    let recovered=false;
+    try{
+      const c = JSON.parse(store.get(STORE+":data:"+state.days) || "null");
+      if(c && c.articles && c.articles.length){
+        state.articles=c.articles; state.ts=c.ts; state.loaded=c.loaded; state.total=c.total;
+        renderAll(); setBanner("Conexão falhou — exibindo a última sincronização salva."); recovered=true;
+      }
+    }catch(e){}
+    if(!recovered) renderError(err);
+  }finally{
+    state.loading=false;
+    btn.classList.remove("loading"); btn.disabled=false;
+    $("#refreshLabel").textContent="Atualizar";
+    $("#pulse").classList.remove("live");
+    $("#prog").classList.remove("on"); setProgress(0);
+    setStatus(); setSync("");
+  }
+}
+
+/* ============================ Rendering ============================ */
+function setSync(t){ const e=$("#st-sync"); if(e){ e.textContent = t || ""; } }
+function setProgress(f){ const p=$("#prog"); if(p&&p.firstElementChild) p.firstElementChild.style.width = Math.round(f*100)+"%"; }
+function setBanner(t){
+  const b=$("#banner"); if(t){ $("#bannerText").textContent=t; b.classList.add("on"); } else b.classList.remove("on");
+}
+function setStatus(){
+  const s=$("#st-stats"); if(!s) return;
+  s.innerHTML="";
+  const synced = state.ts ? "sincronizado " + relTime(state.ts) : "—";
+  const parts = [
+    ["", state.articles.length + " artigos"],
+    ["dot","·"],
+    ["", state.loaded + "/" + state.total + " periódicos"],
+    ["dot","·"],
+    ["", "janela " + state.days + "d"],
+    ["dot","·"],
+    ["", synced],
+  ];
+  for(const [cls,txt] of parts){
+    if(cls==="dot") s.append(h("span",{class:"dot"},txt));
+    else s.append(h("b",{},txt));
+  }
+}
+function relTime(ts){
+  const m = Math.round((Date.now()-ts)/60000);
+  if(m<1) return "agora";
+  if(m<60) return "há " + m + " min";
+  const hh=Math.round(m/60); if(hh<24) return "há " + hh + " h";
+  return "em " + fmtDate(ts);
+}
+
+function counts(){
+  const c = {}; for(const ch of CHANNELS) c[ch.code]=0;
+  for(const a of visibleBase()) c[a.primary]=(c[a.primary]||0)+1;
+  return c;
+}
+// articles passing journal + query filters (but not channel) — basis for channel counts
+function visibleBase(){
+  const q = state.query.toLowerCase();
+  return state.articles.filter(a=>{
+    if(!state.active.has(a.jta)) return false;
+    if(q){
+      const hay = (a.title+" "+a.authors+" "+a.journal+" "+a.jta).toLowerCase();
+      if(!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function renderChannels(){
+  const c = counts();
+  const ul = $("#channels"); ul.innerHTML="";
+  const chips = $("#chips"); chips.innerHTML="";
+
+  const mk = (code,label,n,activeCode)=>{
+    const active = state.channel===activeCode;
+    const color = code==="ALL" ? "var(--signal)" : "var(--c-"+code+")";
+    const li = h("button",{class:"chan"+(active?" active":""), style:"--chan:"+color,
+        "data-empty": (code!=="ALL"&&!n)?"1":null,
+        onclick:()=>{ state.channel=activeCode; renderChannels(); renderFeed(); }},
+      h("span",{class:"chan__code",style:code==="ALL"?"background:var(--ink)":""}, code==="ALL"?"ALL":code),
+      h("span",{class:"chan__name"}, label),
+      h("span",{class:"chan__n"}, code==="ALL"? String(visibleBase().length): String(n))
+    );
+    ul.append(li);
+
+    const chip = h("button",{class:"chip"+(active?" active":""), style:"--chan:"+color,
+        onclick:()=>{ state.channel=activeCode; renderChannels(); renderFeed(); }},
+      h("span",{}, code==="ALL"?"Todas":code),
+      h("span",{class:"n"}, code==="ALL"? String(visibleBase().length): String(n))
+    );
+    chips.append(chip);
+  };
+
+  mk("ALL","Todas as subespecialidades", 0, "ALL");
+  for(const ch of CHANNELS) mk(ch.code, ch.name, c[ch.code]||0, ch.code);
+}
+
+function renderJournals(){
+  const box=$("#jrnls"); box.innerHTML="";
+  for(const j of JOURNALS){
+    const row=h("label",{class:"jrow"},
+      h("input",{type:"checkbox", checked:state.active.has(j.ta),
+        onchange:e=>{ e.target.checked?state.active.add(j.ta):state.active.delete(j.ta); renderChannels(); renderFeed(); }}),
+      h("span",{},
+        h("span",{class:"ta"}, j.ta),
+        j.name
+      )
+    );
+    box.append(row);
+  }
+}
+
+function articleCard(a){
+  const color = "var(--c-"+a.primary+")";
+  const top = h("div",{class:"card__top"},
+    h("span",{class:"card__ta"}, a.jta),
+    h("span",{class:"card__date"}, fmtDate(a.ts))
+  );
+  const foot = h("div",{class:"card__foot"});
+  for(const tg of a.tags.slice(0,3))
+    foot.append(h("span",{class:"tag", style:"--chan:var(--c-"+tg+")"}, tg));
+  foot.append(h("span",{class:"spacer"}));
+  const copyBtn = h("button",{class:"iconbtn", title:"Copiar referência",
+    onclick:e=>{
+      const ref = (a.authors?a.authors+". ":"") + a.title + ". " + a.jta + (a.year?". "+a.year:"") + "." + (a.doi?" doi:"+a.doi:"");
+      navigator.clipboard && navigator.clipboard.writeText(ref);
+      e.currentTarget.classList.add("copied"); e.currentTarget.textContent="copiado";
+      setTimeout(()=>{ e.currentTarget.classList.remove("copied"); e.currentTarget.textContent="copiar"; },1400);
+    }}, "copiar");
+  foot.append(copyBtn);
+  foot.append(h("a",{class:"lnk", href:"https://pubmed.ncbi.nlm.nih.gov/"+a.pmid+"/", target:"_blank", rel:"noopener"}, "PubMed"));
+  if(a.doi) foot.append(h("a",{class:"lnk lnk--mute", href:"https://doi.org/"+a.doi, target:"_blank", rel:"noopener"}, "DOI"));
+
+  return h("article",{class:"card", style:"--chan:"+color},
+    top,
+    h("h3",{class:"card__title"}, a.title),
+    a.authors ? h("p",{class:"card__authors"}, a.authors) : null,
+    foot
+  );
+}
+
+function renderFeed(){
+  const feed=$("#feed"); feed.innerHTML="";
+  const base = visibleBase();
+
+  if(!state.articles.length){ return; } // handled by skeleton/error/initial
+  if(!base.length){
+    feed.append(h("div",{class:"state"},
+      h("h2",{},"Nada nesta seleção"),
+      h("p",{},"Ajuste a busca ou reative periódicos no filtro à esquerda.")));
+    return;
+  }
+
+  if(state.channel!=="ALL"){
+    const list = base.filter(a=>a.primary===state.channel);
+    if(!list.length){
+      feed.append(h("div",{class:"state"},
+        h("h2",{},"Sem novidades em " + CHAN_BY_CODE[state.channel].name),
+        h("p",{},"Nenhum artigo desta subespecialidade na janela atual. Tente ampliar para 180 dias.")));
+      return;
+    }
+    const wrap=h("div",{class:"cards"}); list.forEach(a=>wrap.append(articleCard(a)));
+    feed.append(wrap);
+    return;
+  }
+
+  // grouped by primary subspecialty, in channel order
+  const groups = {};
+  for(const a of base){ (groups[a.primary]||(groups[a.primary]=[])).push(a); }
+  for(const ch of CHANNELS){
+    const list = groups[ch.code]; if(!list||!list.length) continue;
+    const color="var(--c-"+ch.code+")";
+    const sec=h("section",{class:"section", style:"--chan:"+color},
+      h("div",{class:"section__head"},
+        h("span",{class:"section__code"}, ch.code),
+        h("span",{class:"section__title"}, ch.name),
+        h("span",{class:"section__n"}, list.length + (list.length===1?" artigo":" artigos"))
+      )
+    );
+    const wrap=h("div",{class:"cards"}); list.forEach(a=>wrap.append(articleCard(a)));
+    sec.append(wrap); feed.append(sec);
+  }
+}
+
+function showSkeletons(){
+  const feed=$("#feed");
+  if(state.articles.length) return; // keep existing content while refreshing
+  feed.innerHTML="";
+  const wrap=h("div",{class:"cards"});
+  for(let i=0;i<6;i++) wrap.append(h("div",{class:"skel"}));
+  feed.append(wrap);
+}
+function renderError(err){
+  $("#feed").innerHTML="";
+  $("#feed").append(h("div",{class:"state"},
+    h("h2",{},"Não foi possível sincronizar"),
+    h("p",{}, (err&&err.message?err.message+" ":"") + "Verifique a conexão e tente novamente. Se o problema persistir, pode ser bloqueio temporário do NCBI ou do proxy."),
+    h("button",{class:"btn", onclick:()=>loadAll(true)}, "Tentar de novo")
+  ));
+}
+function renderAll(){ renderChannels(); renderFeed(); setStatus(); }
+
+/* ============================ Wire up ============================ */
+function init(){
+  // restore prefs
+  const sd = store.get(STORE+":days"); if(sd){ state.days=+sd; $("#window").value=sd; }
+  const sk = store.get(STORE+":key"); if(sk) $("#apikey").value=sk;
+
+  renderChannels(); renderJournals(); setStatus();
+
+  $("#window").addEventListener("change", e=>{
+    state.days=+e.target.value; store.set(STORE+":days", e.target.value);
+    state.channel="ALL"; loadAll(false);
+  });
+  $("#q").addEventListener("input", e=>{ state.query=e.target.value.trim(); renderChannels(); renderFeed(); });
+  $("#refresh").addEventListener("click", ()=>loadAll(true));
+  $("#apikey").addEventListener("change", e=>store.set(STORE+":key", e.target.value.trim()));
+  $("#jall").addEventListener("click", ()=>{ state.active=new Set(JOURNALS.map(j=>j.ta)); renderJournals(); renderChannels(); renderFeed(); });
+  $("#jnone").addEventListener("click", ()=>{ state.active=new Set(); renderJournals(); renderChannels(); renderFeed(); });
+
+  $("#install").addEventListener("click", async ()=>{
+    if(!deferredPrompt) return;
+    deferredPrompt.prompt();
+    try{ await deferredPrompt.userChoice; }catch(e){}
+    deferredPrompt=null; $("#install").hidden=true;
+  });
+
+  loadAll(false); // automatic first sync
+}
+let deferredPrompt = null;
+window.addEventListener("beforeinstallprompt", e=>{
+  e.preventDefault(); deferredPrompt = e;
+  const b = document.getElementById("install"); if(b) b.hidden = false;
+});
+window.addEventListener("appinstalled", ()=>{
+  deferredPrompt = null;
+  const b = document.getElementById("install"); if(b) b.hidden = true;
+});
+if("serviceWorker" in navigator){
+  window.addEventListener("load", ()=>{ navigator.serviceWorker.register("sw.js").catch(()=>{}); });
+}
+
+document.addEventListener("DOMContentLoaded", init);
+</script>
+</body>
+</html>
