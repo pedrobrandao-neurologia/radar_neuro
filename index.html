@@ -318,12 +318,21 @@ footer code{font-family:"IBM Plex Mono",monospace;background:#EEF2F4;padding:1px
 
 /* ============================ Config ============================ */
 const EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/";
+// NCBI pede que toda requisição identifique a ferramenta e um contato; sem isso
+// o bloqueio por abuso é mais agressivo. Não usamos e-mail pessoal.
+const NCBI_ID = "&tool=radar-neuro&email=radar-neuro%40users.noreply.github.com";
+// Caminhos de acesso, tentados em ordem. O 1º é direto (o E-utilities envia
+// Access-Control-Allow-Origin:*), os demais são proxies CORS de reserva para
+// quando o NCBI bloqueia o IP ou a rede corporativa barra o domínio.
 const PROXIES = [
   u => u,
   u => "https://corsproxy.io/?url=" + encodeURIComponent(u),
   u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u),
   u => "https://api.codetabs.com/v1/proxy/?quest=" + encodeURIComponent(u),
+  u => "https://thingproxy.freeboard.io/fetch/" + u,
 ];
+let proxyPref = 0;                 // índice do último proxy que respondeu; tentado primeiro
+const FETCH_TIMEOUT = 15000;       // aborta uma via lenta para liberar a próxima
 const CACHE_TTL = 6 * 3600 * 1000; // 6 h
 const STORE = "radarneuro.v2";
 
@@ -630,23 +639,38 @@ const state = {
 function apiKey(){ return ($("#apikey").value || store.get(STORE+":key") || "").trim(); }
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 
+async function fetchOnce(wrap, url){
+  const ctl = new AbortController();
+  const timer = setTimeout(()=>ctl.abort(), FETCH_TIMEOUT);
+  try{
+    const r = await fetch(wrap(url), {headers:{Accept:"application/json"}, signal:ctl.signal});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const txt = await r.text();
+    return JSON.parse(txt);   // proxy que devolve HTML de erro cai aqui e vira exceção
+  }finally{ clearTimeout(timer); }
+}
+
 async function fetchJSON(url){
+  // Começa pela via que funcionou por último; assim, uma vez que um proxy
+  // responde, todas as consultas seguintes vão direto a ele em vez de repetir
+  // o caminho bloqueado (que gerava "Failed to fetch" em cada requisição).
+  const order = [proxyPref];
+  for(let i=0;i<PROXIES.length;i++) if(i!==proxyPref) order.push(i);
   let lastErr;
-  for(const wrap of PROXIES){
+  for(const idx of order){
     try{
-      const r = await fetch(wrap(url), {headers:{Accept:"application/json"}});
-      if(!r.ok){ lastErr = new Error("HTTP "+r.status); continue; }
-      const txt = await r.text();
-      return JSON.parse(txt);
+      const data = await fetchOnce(PROXIES[idx], url);
+      proxyPref = idx;
+      return data;
     }catch(e){ lastErr = e; }
   }
-  throw lastErr || new Error("network");
+  throw lastErr || new Error("Falha de rede");
 }
 
 function esearchURL(ta, days, sort){
   const term = '"' + ta + '"[ta]';
   let u = EUTILS + "esearch.fcgi?db=pubmed&retmode=json&retmax=30&datetype=pdat&reldate=" + days +
-          (sort ? "&sort=pub_date" : "") + "&term=" + encodeURIComponent(term);
+          (sort ? "&sort=pub_date" : "") + "&term=" + encodeURIComponent(term) + NCBI_ID;
   const k = apiKey(); if(k) u += "&api_key=" + encodeURIComponent(k);
   return u;
 }
@@ -664,7 +688,7 @@ async function esearchJournal(j, days){
 }
 
 async function esummaryBatch(ids){
-  let u = EUTILS + "esummary.fcgi?db=pubmed&retmode=json&id=" + ids.join(",");
+  let u = EUTILS + "esummary.fcgi?db=pubmed&retmode=json&id=" + ids.join(",") + NCBI_ID;
   const k = apiKey(); if(k) u += "&api_key=" + encodeURIComponent(k);
   const data = await fetchJSON(u);
   return (data && data.result) || {};
@@ -1094,7 +1118,8 @@ function renderError(err){
   $("#feed").innerHTML="";
   $("#feed").append(h("div",{class:"state"},
     h("h2",{},"Não foi possível sincronizar"),
-    h("p",{}, (err&&err.message?err.message+" ":"") + "Verifique a conexão e tente novamente. Se o problema persistir, pode ser bloqueio temporário do NCBI ou do proxy."),
+    h("p",{}, (err&&err.message?err.message+" ":"") + "Verifique a conexão e tente novamente. Se o problema persistir, pode ser bloqueio temporário do NCBI ou do proxy — costuma se resolver em alguns minutos."),
+    h("p",{class:"hint"}, "Dica: cadastrar uma Chave NCBI (nas configurações, ícone de engrenagem) aumenta o limite de consultas e reduz muito a chance de bloqueio."),
     h("button",{class:"btn", onclick:()=>loadAll(true)}, "Tentar de novo")
   ));
 }

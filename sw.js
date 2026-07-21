@@ -1,5 +1,5 @@
 /* Radar Neuro — service worker */
-const CACHE = "radar-neuro-v2";
+const CACHE = "radar-neuro-v3";
 const SHELL = [
   "./",
   "./index.html",
