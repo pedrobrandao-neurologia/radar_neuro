@@ -189,6 +189,7 @@ button{font-family:inherit;cursor:pointer}
 .card__ta{font-family:"IBM Plex Mono",monospace;font-size:11.5px;font-weight:500;color:var(--signal);
   background:var(--signal-wash);border-radius:4px;padding:2px 7px;white-space:nowrap}
 .card__date{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--ink-faint)}
+.ptype{font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--signal);background:var(--signal-wash);border-radius:999px;padding:1px 8px;margin-left:auto}
 .card__title{font-size:15.5px;font-weight:600;line-height:1.38;margin:2px 0 6px;color:var(--ink)}
 .card__authors{font-size:12.5px;color:var(--ink-soft);margin:0 0 10px}
 .card__foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -308,7 +309,7 @@ footer code{font-family:"IBM Plex Mono",monospace;background:#EEF2F4;padding:1px
 </div>
 
 <footer>
-  <strong>Fonte:</strong> PubMed via <a href="https://www.ncbi.nlm.nih.gov/books/NBK25501/" target="_blank" rel="noopener">NCBI E-utilities</a>. Cada periódico é consultado por sua abreviação NLM (campo <code>[ta]</code>); os artigos são ordenados por data e classificados em dois níveis a partir do título: <strong>subespecialidade</strong> (1º nível) e <strong>grupo de doenças</strong> (2º nível). Selecione uma subespecialidade para navegar pelos grupos de doenças; um mesmo artigo pode receber 2–3 rótulos quando o tema é transversal (ex.: RBD em sono e movimento; encefalite autoimune em epilepsia, cognição e neuroimunologia).<br>
+  <strong>Fonte:</strong> PubMed via <a href="https://www.ncbi.nlm.nih.gov/books/NBK25501/" target="_blank" rel="noopener">NCBI E-utilities</a>. Cada periódico é consultado por sua abreviação NLM (campo <code>[ta]</code>); os artigos (os mais recentes que entraram no PubMed na janela escolhida) são ordenados por data e classificados em dois níveis a partir do título, dos descritores MeSH, das palavras-chave dos autores e do resumo: <strong>subespecialidade</strong> (1º nível) e <strong>grupo de doenças</strong> (2º nível). Selecione uma subespecialidade para navegar pelos grupos de doenças; um mesmo artigo pode receber 2–3 rótulos quando o tema é transversal (ex.: RBD em sono e movimento; encefalite autoimune em epilepsia, cognição e neuroimunologia).<br>
   Aplicativo estático: todo o processamento ocorre no navegador. Para hospedar, basta publicar este <code>index.html</code> no GitHub Pages. A classificação por subespecialidade é heurística e serve para triagem rápida, não substitui a leitura do artigo.<br>
   <strong>Instalar no celular:</strong> Android/Chrome mostra o botão <em>Instalar app</em> acima. No iPhone, abra no Safari e use <em>Compartilhar → Adicionar à Tela de Início</em>.
 </footer>
@@ -318,23 +319,29 @@ footer code{font-family:"IBM Plex Mono",monospace;background:#EEF2F4;padding:1px
 
 /* ============================ Config ============================ */
 const EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/";
-// NCBI pede que toda requisição identifique a ferramenta e um contato; sem isso
+// O NCBI pede que toda requisição identifique a ferramenta e um contato; sem isso
 // o bloqueio por abuso é mais agressivo. Não usamos e-mail pessoal.
 const NCBI_ID = "&tool=radar-neuro&email=radar-neuro%40users.noreply.github.com";
-// Caminhos de acesso, tentados em ordem. O 1º é direto (o E-utilities envia
-// Access-Control-Allow-Origin:*), os demais são proxies CORS de reserva para
-// quando o NCBI bloqueia o IP ou a rede corporativa barra o domínio.
-const PROXIES = [
-  u => u,
-  u => "https://corsproxy.io/?url=" + encodeURIComponent(u),
-  u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u),
-  u => "https://api.codetabs.com/v1/proxy/?quest=" + encodeURIComponent(u),
-  u => "https://thingproxy.freeboard.io/fetch/" + u,
+
+// Vias de acesso ao E-utilities. A direta é sempre a preferida (o NCBI envia
+// Access-Control-Allow-Origin:*); os proxies CORS públicos só entram quando a
+// via direta falha repetidamente (rede corporativa, bloqueio de IP, extensão).
+// Uma via que falha é "posta de molho" por alguns minutos, para que as demais
+// consultas não percam tempo com ela.
+const ROUTES = [
+  {id:"direct",     direct:true,  wrap:u => u},
+  {id:"allorigins", direct:false, wrap:u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u)},
+  {id:"codetabs",   direct:false, wrap:u => "https://api.codetabs.com/v1/proxy/?quest=" + encodeURIComponent(u)},
+  {id:"corsproxy",  direct:false, wrap:u => "https://corsproxy.io/?url=" + encodeURIComponent(u)},
 ];
-let proxyPref = 0;                 // índice do último proxy que respondeu; tentado primeiro
-const FETCH_TIMEOUT = 15000;       // aborta uma via lenta para liberar a próxima
-const CACHE_TTL = 6 * 3600 * 1000; // 6 h
-const STORE = "radarneuro.v2";
+
+const RETMAX_PER_JOURNAL = 30;      // artigos mais recentes por periódico
+const FETCH_BATCH = 200;            // PMIDs por chamada ao efetch/esummary
+const T_SEARCH = 15000;             // timeout por tentativa (ms)
+const T_FETCH = 45000;
+const CACHE_TTL = 6 * 3600 * 1000;  // 6 h
+const PREFS = "radarneuro.v2";      // chave NCBI e janela (mantidas da versão anterior)
+const DATA = "radarneuro.v3:data:"; // cache dos artigos (por janela)
 
 // Os 50 periódicos de neurologia clínica mais citados (ordem ~ JIF 2024).
 // `ta` = abreviação NLM usada na busca PubMed (campo [ta]); `hint` reforça
@@ -402,7 +409,7 @@ const CHANNELS = [
   {code:"CEF", name:"Cefaleia e Dor",
    kw:["headache","migraine","cephalalgia","CGRP","cluster headache","trigeminal neuralgia","medication overuse","neuropathic pain"],
    g:[
-    {code:"migranea", name:"Migrânea", kw:["migraine","migrainous","migraine aura","vestibular migraine","hemiplegic migraine","CGRP","gepant","ditan"]},
+    {code:"migranea", name:"Migrânea", kw:["migraine","migrainous","migraine aura","vestibular migraine","hemiplegic migraine","CGRP","*gepant","*ditan"]},
     {code:"tensional", name:"Cefaleia tipo-tensional", kw:["tension-type headache","tension headache"]},
     {code:"tac", name:"Trigêmino-autonômicas", kw:["cluster headache","trigeminal autonomic","paroxysmal hemicrania","hemicrania continua","SUNCT","SUNA"]},
     {code:"secundaria", name:"Cefaleias secundárias", kw:["secondary headache","thunderclap headache","post-traumatic headache","spontaneous intracranial hypotension","low pressure headache"]},
@@ -411,18 +418,18 @@ const CHANNELS = [
     {code:"dorneuro", name:"Dor neuropática", kw:["neuropathic pain","central pain","postherpetic neuralgia","chronic pain","painful neuropathy"]},
    ]},
   {code:"AVC", name:"Cerebrovascular / AVC",
-   kw:["stroke","ischemic","ischaemic","hemorrhage","haemorrhage","thrombectomy","thrombolysis","cerebrovascular","carotid","aneurysm","intracerebral","subarachnoid","alteplase","tenecteplase","recanalization","transient ischemic attack","moyamoya"],
+   kw:["stroke","ischemic","ischaemic","hemorrhage","haemorrhage","thrombectomy","thrombolysis","thrombolytic","cerebrovascular","carotid","aneurysm","intracerebral","subarachnoid","alteplase","tenecteplase","recanalization","transient ischemic attack","moyamoya"],
    g:[
     {code:"isquemico", name:"AVC isquêmico", kw:["ischemic stroke","ischaemic stroke","acute ischemic","thrombectomy","thrombolysis","alteplase","tenecteplase","recanalization","large vessel occlusion","reperfusion","transient ischemic attack"]},
     {code:"hip", name:"Hemorragia intraparenquimatosa", kw:["intracerebral hemorrhage","intracerebral haemorrhage","intraparenchymal hemorrhage"]},
     {code:"hsa", name:"HSA / aneurismas", kw:["subarachnoid hemorrhage","subarachnoid haemorrhage","aneurysm","aneurysmal"]},
-    {code:"pequenosvasos", name:"Doença de pequenos vasos", kw:["small vessel disease","cerebral microbleeds","leukoaraiosis","cadasil","white matter hyperintensit"]},
+    {code:"pequenosvasos", name:"Doença de pequenos vasos", kw:["small vessel disease","cerebral microbleeds","leukoaraiosis","cadasil","white matter hyperintensit*"]},
     {code:"tvc", name:"Trombose venosa cerebral", kw:["cerebral venous thrombosis","venous sinus thrombosis","CVST"]},
     {code:"malformacoes", name:"Malformações vasculares", kw:["arteriovenous malformation","cavernoma","cavernous malformation","dural fistula","moyamoya"]},
     {code:"prevencao", name:"Prevenção e risco vascular", kw:["stroke prevention","secondary prevention","vascular risk","carotid stenosis","atrial fibrillation","anticoagulation"]},
    ]},
   {code:"EPI", name:"Epilepsia",
-   kw:["epilep","seizure","convuls","status epilepticus","antiseizure","antiepileptic","EEG","temporal lobe","SUDEP","ictal","interictal"],
+   kw:["epilep*","seizure","convuls*","status epilepticus","antiseizure","antiepileptic","EEG","temporal lobe","SUDEP","ictal","interictal"],
    g:[
     {code:"focal", name:"Epilepsias focais", kw:["focal epilepsy","focal seizure","temporal lobe epilepsy"]},
     {code:"generalizada", name:"Epilepsias generalizadas", kw:["generalized epilepsy","generalised epilepsy","absence seizure","juvenile myoclonic"]},
@@ -445,11 +452,11 @@ const CHANNELS = [
     {code:"funcional", name:"Funcionais e iatrogênicos", kw:["functional movement","psychogenic movement","tardive","drug-induced parkinsonism"]},
    ]},
   {code:"COG", name:"Demência e Cognição",
-   kw:["alzheimer","dementia","cognitive","cognition","amyloid","tau","tauopathy","frontotemporal","lewy bod","mild cognitive impairment","neuropsycholog","primary progressive aphasia","neurodegener","apolipoprotein","MCI"],
+   kw:["alzheimer","dementia","cognitive","cognition","amyloid","tau","tauopathy","frontotemporal","lewy bod*","mild cognitive impairment","neuropsycholog*","primary progressive aphasia","neurodegener*","apolipoprotein","MCI"],
    g:[
     {code:"alzheimer", name:"Doença de Alzheimer", kw:["alzheimer","amyloid","anti-amyloid","lecanemab","donanemab","apolipoprotein"]},
     {code:"vascular", name:"Demência vascular e mista", kw:["vascular dementia","mixed dementia"]},
-    {code:"lewy", name:"Demência com corpos de Lewy", kw:["lewy bod","dementia with lewy"]},
+    {code:"lewy", name:"Demência com corpos de Lewy", kw:["lewy bod*","dementia with lewy"]},
     {code:"ftd", name:"Degeneração frontotemporal", kw:["frontotemporal","primary progressive aphasia","FTD"]},
     {code:"mci", name:"Comprometimento cognitivo leve", kw:["mild cognitive impairment","MCI","subjective cognitive"]},
     {code:"rapida", name:"Rapidamente progressivas / priônicas", kw:["rapidly progressive dementia","creutzfeldt","prion"]},
@@ -467,7 +474,7 @@ const CHANNELS = [
     {code:"plexo", name:"Plexopatias e mononeuropatias", kw:["plexopathy","brachial plexus","mononeuropathy","carpal tunnel","radiculopathy"]},
    ]},
   {code:"DES", name:"Neuroimunologia / Desmielinizantes",
-   kw:["multiple sclerosis","demyelinat","neuromyelitis","NMOSD","MOGAD","optic neuritis","autoimmune encephalitis","neuroinflammat","oligoclonal","relapsing","disease-modifying","paraneoplastic"],
+   kw:["multiple sclerosis","demyelinat*","neuromyelitis","NMOSD","MOGAD","optic neuritis","autoimmune encephalitis","neuroinflammat*","oligoclonal","relapsing","disease-modifying","paraneoplastic"],
    g:[
     {code:"em", name:"Esclerose múltipla", kw:["multiple sclerosis","relapsing","disease-modifying","oligoclonal"]},
     {code:"nmosd", name:"NMOSD", kw:["neuromyelitis","NMOSD","aquaporin"]},
@@ -477,20 +484,20 @@ const CHANNELS = [
     {code:"paraneo", name:"Paraneoplásicas", kw:["paraneoplastic"]},
    ]},
   {code:"ONC", name:"Neuro-oncologia",
-   kw:["glioma","glioblastoma","brain tumor","brain tumour","meningioma","neuro-oncolog","astrocytoma","brain metastas","CNS lymphoma","IDH-mutant","schwannoma","pituitary"],
+   kw:["glioma","glioblastoma","brain tumor","brain tumour","meningioma","neuro-oncolog*","astrocytoma","brain metastas*","CNS lymphoma","IDH-mutant","schwannoma","pituitary"],
    g:[
     {code:"glioma", name:"Gliomas", kw:["glioma","glioblastoma","astrocytoma","IDH-mutant","oligodendroglioma"]},
     {code:"meningioma", name:"Meningiomas", kw:["meningioma"]},
-    {code:"metastase", name:"Metástases do SNC", kw:["brain metastas","leptomeningeal","CNS lymphoma"]},
-    {code:"nervo", name:"Tumores de nervos periféricos", kw:["schwannoma","nerve sheath tumor","neurofibroma"]},
+    {code:"metastase", name:"Metástases do SNC", kw:["brain metastas*","leptomeningeal","CNS lymphoma"]},
+    {code:"nervo", name:"Tumores de nervos periféricos", kw:["schwannoma","nerve sheath tumor","neurofibroma*"]},
     {code:"base", name:"Hipofisários / base de crânio", kw:["pituitary","skull base","craniopharyngioma"]},
     {code:"neurotox", name:"Complicações / neurotoxicidade", kw:["neurotoxicity","chemotherapy-induced","immune effector cell-associated neurotoxicity","CAR-T"]},
    ]},
   {code:"SON", name:"Medicina do Sono",
-   kw:["insomnia","narcolepsy","circadian","obstructive sleep apnea","sleep apnea","REM sleep","hypersomnia","parasomnia","sleep disorder","cataplexy"],
+   kw:["insomnia","narcolepsy","circadian","obstructive sleep apnea","sleep apnea","sleep apnoea","REM sleep","hypersomnia","parasomnia","sleep disorder","cataplexy"],
    g:[
     {code:"insonia", name:"Insônia", kw:["insomnia"]},
-    {code:"apneia", name:"Distúrbios respiratórios (apneia)", kw:["sleep apnea","obstructive sleep","OSA","sleep-disordered breathing"]},
+    {code:"apneia", name:"Distúrbios respiratórios (apneia)", kw:["sleep apnea","sleep apnoea","obstructive sleep","OSA","sleep-disordered breathing"]},
     {code:"narcolepsia", name:"Hipersonias e narcolepsia", kw:["narcolepsy","hypersomnia","cataplexy"]},
     {code:"parassonia", name:"Parassonias (RBD)", kw:["parasomnia","REM sleep behavior","REM sleep behaviour","RBD"]},
     {code:"circadiano", name:"Ritmo circadiano", kw:["circadian"]},
@@ -501,7 +508,7 @@ const CHANNELS = [
    g:[
     {code:"meningoenc", name:"Meningites e encefalites", kw:["meningitis","encephalitis"]},
     {code:"viral", name:"Virais (HIV, HTLV, herpes)", kw:["HIV","HTLV","herpes simplex","viral encephalitis"]},
-    {code:"parasitaria", name:"Parasitárias", kw:["neurocysticercosis","cerebral malaria","chagas","toxoplasm"]},
+    {code:"parasitaria", name:"Parasitárias", kw:["neurocysticercosis","cerebral malaria","chagas","toxoplasm*"]},
     {code:"bacteriana", name:"Bacterianas", kw:["neurosyphilis","tuberculous meningitis","neurotuberculosis","lyme"]},
     {code:"fungica", name:"Fúngicas / oportunistas", kw:["cryptococcal","progressive multifocal","PML","fungal infection"]},
     {code:"prion", name:"Priônicas", kw:["prion","creutzfeldt"]},
@@ -567,36 +574,140 @@ const CHANNELS = [
     {code:"desenvolvimento", name:"Encefalopatias do desenvolvimento", kw:["developmental encephalopathy","developmental delay","developmental and epileptic encephalopathy"]},
     {code:"epipediatrica", name:"Epilepsias pediátricas", kw:["infantile spasms","west syndrome","childhood epilepsy","pediatric epilepsy"]},
     {code:"pc", name:"Paralisia cerebral", kw:["cerebral palsy"]},
-    {code:"neurodes", name:"Neurodesenvolvimento", kw:["autism","attention-deficit","ADHD","neurodevelopmental disorder"]},
+    {code:"neurodes", name:"Neurodesenvolvimento", kw:["autis*","attention-deficit","ADHD","neurodevelopmental disorder"]},
     {code:"nmped", name:"Neuromusculares pediátricas", kw:["spinal muscular atrophy","SMA","duchenne"]},
    ]},
   {code:"GER", name:"Neurologia Geral", kw:[], g:[]},
 ];
+/* ============================ Taxonomy compile ============================ */
+// Versão dos dados em cache: muda sozinha quando a lista de periódicos ou a
+// taxonomia é editada, para que artigos classificados com regras antigas não
+// continuem aparecendo.
+function hashStr(s){ let h=5381; for(let i=0;i<s.length;i++) h=((h<<5)+h+s.charCodeAt(i))|0; return (h>>>0).toString(36); }
+const DATA_VERSION = "3." + hashStr(JSON.stringify([JOURNALS, CHANNELS]));
 
 const CHAN_BY_CODE = Object.fromEntries(CHANNELS.map(c=>[c.code,c]));
 const CHAN_ORDER = Object.fromEntries(CHANNELS.map((c,i)=>[c.code,i]));
 const GROUP_NAME = {}; // "CHAN:group" -> nome legível
-for(const ch of CHANNELS) if(ch.g) for(const g of ch.g) GROUP_NAME[ch.code+":"+g.code]=g.name;
+for(const ch of CHANNELS) for(const g of (ch.g||[])) GROUP_NAME[ch.code+":"+g.code]=g.name;
+const JOURNAL_BY_TA = Object.fromEntries(JOURNALS.map(j=>[j.ta,j]));
 
-// Precompile one regex per channel and per disease group
-function reEsc(s){return s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");}
-function mkRe(kw){ return kw.length ? new RegExp("\\b(" + kw.map(reEsc).join("|") + ")\\b","i") : null; }
+/* Regras de correspondência das palavras-chave:
+   - termo comum  -> palavra inteira, sem diferenciar maiúsculas, aceitando plural
+                     (seizure/seizures, neuropathy/neuropathies, Alzheimer's);
+   - termo*       -> radical (epilep* = epilepsy, epileptic, epileptiform…);
+   - *termo       -> sufixo (*gepant = atogepant, rimegepant…);
+   - SIGLA        -> só em maiúsculas e como palavra isolada (SMA ≠ "small",
+                     POTS ≠ "pots", ALS ≠ "also"); aceita plural "s" (EEGs).
+   O texto é normalizado antes (acentos removidos, α→alpha, β→beta, traços). */
+function reEsc(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"); }
+function kwPattern(kw){
+  let core = String(kw).trim();
+  const acronym = /[A-Z]/.test(core) && !/[a-z]/.test(core);
+  let pre = "", stem = false;
+  if(core.startsWith("*")){ pre = "[a-z0-9]*"; core = core.slice(1); }
+  if(core.endsWith("*")){ stem = true; core = core.slice(0,-1); }
+  if(!core) return null;
+  if(acronym){
+    return {cs:true, src:"(?:^|[^A-Za-z0-9])" + pre + reEsc(core) + (stem ? "[A-Za-z0-9]*" : "s?") + "(?![A-Za-z0-9])"};
+  }
+  core = core.toLowerCase();
+  let body;
+  if(stem) body = reEsc(core) + "[a-z0-9]*";
+  else if(/[^aeiou]y$/.test(core)) body = reEsc(core.slice(0,-1)) + "(?:y|ies)";
+  else body = reEsc(core) + "(?:s|es)?";
+  const lead = /^[a-z0-9]/.test(core) || pre ? "\\b" : "";
+  return {cs:false, src: lead + pre + body + (/[a-z0-9]$/.test(core) ? "\\b" : "")};
+}
+function compile(kws){
+  const ci=[], cs=[];
+  for(const kw of (kws||[])){ const p=kwPattern(kw); if(p) (p.cs?cs:ci).push(p.src); }
+  return {
+    ci:  ci.length ? new RegExp(ci.join("|"), "i")  : null,
+    cs:  cs.length ? new RegExp(cs.join("|"))       : null,
+    ciG: ci.length ? new RegExp(ci.join("|"), "gi") : null,
+    csG: cs.length ? new RegExp(cs.join("|"), "g")  : null,
+  };
+}
+function mTest(m, t){ return !!t && ((m.ci && m.ci.test(t)) || (m.cs && m.cs.test(t))); }
+function mCount(m, t){
+  if(!t) return 0;
+  let n = 0;
+  if(m.ciG) n += (t.match(m.ciG)||[]).length;
+  if(m.csG) n += (t.match(m.csG)||[]).length;
+  return n;
+}
 for(const ch of CHANNELS){
-  ch._re = mkRe(ch.kw);
   ch.g = ch.g || [];
-  for(const g of ch.g) g._re = mkRe(g.kw);
+  ch._m = compile(ch.kw);
+  ch._all = compile(ch.kw.concat(...ch.g.map(g=>g.kw)));
+  for(const g of ch.g) g._m = compile(g.kw);
+}
+
+function normText(s){
+  return String(s||"")
+    .replace(/α/g,"alpha").replace(/β/g,"beta").replace(/γ/g,"gamma").replace(/κ/g,"kappa")
+    .normalize("NFD").replace(/[̀-ͯ]/g,"")
+    .replace(/[‐-―−]/g,"-").replace(/[‘’ʼ]/g,"'")
+    .replace(/\s+/g," ");
+}
+
+/* Classificação em dois níveis, multi-rótulo.
+   Evidências (pesos): título (mais forte) > MeSH/palavras-chave dos autores >
+   menções no resumo > periódico especializado (hint). */
+function classify(rec, hint){
+  const title = normText(rec.title);
+  const terms = normText((rec.mesh||[]).concat(rec.keywords||[]).join(" ; "));
+  const abs = normText(rec.abstract);
+  const scores = {};
+  const cand = [];
+  for(const ch of CHANNELS){
+    if(!ch.kw.length && !ch.g.length) continue;
+    let s = 0;
+    const tB = mTest(ch._m, title);
+    const tG = ch.g.some(g=>mTest(g._m, title));
+    if(tB) s += 2;
+    if(tG) s += 2;
+    if(mTest(ch._all, terms)) s += 2;
+    s += 0.5 * Math.min(mCount(ch._all, abs), 4);
+    if(hint===ch.code) s += 1.5;
+    if(s>0){ scores[ch.code]=s; cand.push(ch.code); }
+  }
+  cand.sort((a,b)=> (scores[b]-scores[a]) || (CHAN_ORDER[a]-CHAN_ORDER[b]));
+  const best = cand.length ? scores[cand[0]] : 0;
+  let tags = cand.filter(c=>scores[c]>=2 && scores[c]>=0.4*best).slice(0,3);
+  if(!tags.length){
+    if(hint && CHAN_BY_CODE[hint]) tags=[hint];
+    else if(best>=1) tags=[cand[0]];
+    else tags=["GER"];
+  }
+  const topics = [];
+  for(const code of tags){
+    const ch = CHAN_BY_CODE[code];
+    for(const g of ch.g){
+      if(mTest(g._m, title) || mTest(g._m, terms) || mCount(g._m, abs)>=2)
+        topics.push({chan:code, code:g.code, name:g.name});
+    }
+  }
+  topics.sort((a,b)=>CHAN_ORDER[a.chan]-CHAN_ORDER[b.chan]);
+  return {primary:tags[0], tags, topics};
 }
 
 const MONTHS = ["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"];
+const MON_EN = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11,
+                spring:2,summer:5,fall:8,autumn:8,winter:11};
 
 /* ============================ Safe storage ============================ */
 const store = (()=>{
-  let mem = {};
+  const mem = {};
   let ok = false;
   try{ const k="__t"; localStorage.setItem(k,"1"); localStorage.removeItem(k); ok=true; }catch(e){ ok=false; }
   return {
     get(k){ try{ return ok ? localStorage.getItem(k) : (mem[k]??null); }catch(e){ return mem[k]??null; } },
-    set(k,v){ try{ ok ? localStorage.setItem(k,v) : (mem[k]=v); }catch(e){ mem[k]=v; } },
+    // devolve false quando a cota estoura, para o chamador poder liberar espaço
+    set(k,v){ try{ if(ok) localStorage.setItem(k,v); else mem[k]=v; return true; }catch(e){ return false; } },
+    remove(k){ try{ ok ? localStorage.removeItem(k) : delete mem[k]; }catch(e){} },
+    keys(){ try{ return ok ? Object.keys(localStorage) : Object.keys(mem); }catch(e){ return []; } },
   };
 })();
 
@@ -624,6 +735,7 @@ const $ = s => document.querySelector(s);
 /* ============================ State ============================ */
 const state = {
   days: 90,
+  dataDays: 90,         // janela a que os artigos exibidos pertencem
   channel: "ALL",
   group: null,          // grupo de doenças selecionado (2º nível), dentro de um canal
   query: "",
@@ -632,258 +744,564 @@ const state = {
   loaded: 0,
   total: JOURNALS.length,
   ts: 0,
-  loading: false,
 };
+let sync = null;        // {ctl, gen} da sincronização em andamento
+let syncGen = 0;
 
 /* ============================ Networking ============================ */
-function apiKey(){ return ($("#apikey").value || store.get(STORE+":key") || "").trim(); }
-const sleep = ms => new Promise(r=>setTimeout(r,ms));
+function apiKey(){
+  const el = $("#apikey");
+  return ((el && el.value) || store.get(PREFS+":key") || "").trim();
+}
 
-async function fetchOnce(wrap, url){
+class NetErr extends Error{
+  // kind: rate | net | timeout | server | route | fatal | abort
+  constructor(msg, kind){ super(msg); this.kind = kind; }
+}
+const abortErr = () => new NetErr("cancelado", "abort");
+
+function sleep(ms, signal){
+  return new Promise((res, rej)=>{
+    if(signal && signal.aborted) return rej(abortErr());
+    const t = setTimeout(()=>{ if(signal) signal.removeEventListener("abort", onA); res(); }, ms);
+    function onA(){ clearTimeout(t); rej(abortErr()); }
+    if(signal) signal.addEventListener("abort", onA, {once:true});
+  });
+}
+
+// Limitador global: o NCBI aceita 3 req/s sem chave e 10 req/s com chave.
+// Toda tentativa (direta ou via proxy, que também chega ao NCBI) passa por aqui.
+// Em caso de HTTP 429 o intervalo aumenta e depois volta ao normal aos poucos.
+const limiter = (()=>{
+  let next = 0, penalty = 1;
+  return {
+    // A penalidade só vale para a via direta (é o IP do usuário que o NCBI limita).
+    async wait(signal, direct){
+      const base = apiKey() ? 110 : 360;
+      const gap = Math.round(base * (direct ? penalty : 1));
+      const now = Date.now();
+      const at = Math.max(now, next);
+      next = at + gap;
+      if(at > now) await sleep(at - now, signal);
+    },
+    slow(){ penalty = Math.min(penalty * 1.6, 4); },
+    ok(){ penalty = Math.max(1, penalty * 0.93); },
+  };
+})();
+
+const routeHealth = Object.fromEntries(ROUTES.map(r=>[r.id, {fails:0, deadUntil:0, lastOk:0}]));
+function routeOrder(){
+  const now = Date.now();
+  let alive = ROUTES.filter(r => routeHealth[r.id].deadUntil <= now);
+  if(!alive.length){ for(const r of ROUTES) routeHealth[r.id].deadUntil = 0; alive = ROUTES.slice(); }
+  const direct = alive.filter(r=>r.direct);
+  const proxies = alive.filter(r=>!r.direct).sort((a,b)=> routeHealth[b.id].lastOk - routeHealth[a.id].lastOk);
+  return direct.concat(proxies);
+}
+function routeOk(r){ const s=routeHealth[r.id]; s.fails=0; s.lastOk=Date.now(); }
+function routeFail(r, hard){
+  const s = routeHealth[r.id];
+  s.fails++;
+  if(hard || s.fails>=2){ s.deadUntil = Date.now() + (r.direct ? 60000 : 180000); s.fails = 0; }
+}
+let lastRoute = "direct";
+
+// A chave pessoal do NCBI nunca é enviada a proxies de terceiros.
+function stripKey(u){ return u.replace(/&api_key=[^&]*/,""); }
+
+async function attempt(route, url, signal, timeout, parse){
+  await limiter.wait(signal, route.direct);
   const ctl = new AbortController();
-  const timer = setTimeout(()=>ctl.abort(), FETCH_TIMEOUT);
+  const onAbort = () => ctl.abort();
+  if(signal) signal.addEventListener("abort", onAbort, {once:true});
+  let timedOut = false;
+  const timer = setTimeout(()=>{ timedOut = true; ctl.abort(); }, timeout);
   try{
-    const r = await fetch(wrap(url), {headers:{Accept:"application/json"}, signal:ctl.signal});
-    if(!r.ok) throw new Error("HTTP "+r.status);
-    const txt = await r.text();
-    return JSON.parse(txt);   // proxy que devolve HTML de erro cai aqui e vira exceção
-  }finally{ clearTimeout(timer); }
-}
-
-async function fetchJSON(url){
-  // Começa pela via que funcionou por último; assim, uma vez que um proxy
-  // responde, todas as consultas seguintes vão direto a ele em vez de repetir
-  // o caminho bloqueado (que gerava "Failed to fetch" em cada requisição).
-  const order = [proxyPref];
-  for(let i=0;i<PROXIES.length;i++) if(i!==proxyPref) order.push(i);
-  let lastErr;
-  for(const idx of order){
-    try{
-      const data = await fetchOnce(PROXIES[idx], url);
-      proxyPref = idx;
-      return data;
-    }catch(e){ lastErr = e; }
+    const res = await fetch(route.wrap(route.direct ? url : stripKey(url)),
+                            {signal:ctl.signal, cache:"no-store", credentials:"omit"});
+    if(res.status===429) throw new NetErr("limite de consultas do NCBI (HTTP 429)", "rate");
+    if(!res.ok){
+      const st = res.status;
+      if(route.direct && (st===400 || st===414)) throw new NetErr("NCBI recusou a consulta (HTTP "+st+")", "fatal");
+      throw new NetErr("HTTP "+st, st>=500 ? "server" : "route");
+    }
+    const txt = await res.text();
+    return parse(txt, route);
+  }catch(e){
+    if(signal && signal.aborted) throw abortErr();
+    if(e instanceof NetErr) throw e;
+    if(timedOut) throw new NetErr("tempo de resposta esgotado", "timeout");
+    // TypeError "Failed to fetch": rede fora, domínio bloqueado ou 429 sem cabeçalho CORS
+    throw new NetErr("falha de rede (" + (e && e.message || "Failed to fetch") + ")", "net");
+  }finally{
+    clearTimeout(timer);
+    if(signal) signal.removeEventListener("abort", onAbort);
   }
-  throw lastErr || new Error("Falha de rede");
 }
 
-function esearchURL(ta, days, sort){
-  const term = '"' + ta + '"[ta]';
-  let u = EUTILS + "esearch.fcgi?db=pubmed&retmode=json&retmax=30&datetype=pdat&reldate=" + days +
-          (sort ? "&sort=pub_date" : "") + "&term=" + encodeURIComponent(term) + NCBI_ID;
-  const k = apiKey(); if(k) u += "&api_key=" + encodeURIComponent(k);
-  return u;
-}
-
-async function esearchJournal(j, days){
-  for(const sort of [true,false]){           // try sorted; fall back to unsorted on error
-    try{
-      const data = await fetchJSON(esearchURL(j.ta, days, sort));
-      const r = data && data.esearchresult;
-      if(r && r.idlist) return r.idlist;
-      if(r && r.ERROR && sort) continue;       // bad sort param -> retry unsorted
-    }catch(e){ if(sort) continue; }
+async function fetchNCBI(url, {signal, timeout, parse}){
+  let lastErr = null;
+  for(const r of routeOrder()){
+    let hard = false;
+    for(let n=0; n<3; n++){
+      try{
+        const v = await attempt(r, url, signal, timeout, parse);
+        routeOk(r); limiter.ok(); lastRoute = r.id;
+        return v;
+      }catch(e){
+        if(e.kind==="abort" || e.kind==="fatal") throw e;
+        lastErr = e;
+        if(e.kind==="rate"){ if(r.direct) limiter.slow(); await sleep(1500 * (n+1), signal); continue; }
+        if(n===0 && ((e.kind==="net" && r.direct) || e.kind==="server")){
+          // 1 nova tentativa na mesma via: falhas transitórias (e, na via direta,
+          // 429 sem cabeçalho CORS, que o navegador reporta como falha de rede)
+          if(e.kind==="net") limiter.slow();
+          await sleep(1000, signal); continue;
+        }
+        hard = (e.kind==="route");   // proxy recusou (403 etc.) ou devolveu lixo
+        break;
+      }
+    }
+    routeFail(r, hard);
   }
-  return null;
+  throw lastErr || new NetErr("nenhuma via de acesso disponível", "net");
 }
 
-async function esummaryBatch(ids){
-  let u = EUTILS + "esummary.fcgi?db=pubmed&retmode=json&id=" + ids.join(",") + NCBI_ID;
-  const k = apiKey(); if(k) u += "&api_key=" + encodeURIComponent(k);
-  const data = await fetchJSON(u);
-  return (data && data.result) || {};
+/* ---------- Parsers / validadores de resposta ---------- */
+function rateOrGarbage(txt){
+  const t = txt.trim();
+  if(t.startsWith("{")){
+    try{
+      const o = JSON.parse(t);
+      if(o && o.error) return new NetErr("NCBI: " + o.error, /rate|limit|exceed/i.test(o.error) ? "rate" : "server");
+    }catch(e){}
+  }
+  if(/<ERROR>|Backend|temporarily unavailable|Service Unavailable/i.test(t.slice(0,2000)))
+    return new NetErr("NCBI indisponível no momento", "server");
+  return new NetErr("resposta inválida da via de acesso", "route");
+}
+function parseJSONResp(txt){
+  const t = (txt||"").trim();
+  if(!t.startsWith("{")) throw rateOrGarbage(t);
+  let o;
+  try{ o = JSON.parse(t); }catch(e){ throw new NetErr("JSON inválido", "route"); }
+  if(o && o.error && !o.esearchresult && !o.result) throw rateOrGarbage(t);
+  return o;
+}
+function parseSearchResp(txt){
+  const o = parseJSONResp(txt);
+  const r = o.esearchresult;
+  if(!r) throw new NetErr("resposta sem esearchresult", "route");
+  if(r.ERROR && !Array.isArray(r.idlist) && /backend|temporar|unavailable|timeout|try again/i.test(r.ERROR))
+    throw new NetErr("NCBI: " + r.ERROR, "server");
+  return r;
+}
+function parseSummaryResp(txt){
+  const o = parseJSONResp(txt);
+  if(!o.result) throw new NetErr("resposta sem result", "server");
+  return o.result;
+}
+function parseMedlineResp(txt){
+  const t = (txt||"").replace(/^﻿/,"");
+  if(!t.trim()) return [];
+  if(!/^PMID- /m.test(t)) throw rateOrGarbage(t);
+  return parseMedline(t);
 }
 
-/* ============================ Parsing & classify ============================ */
-function decodeTitle(raw){
-  if(!raw) return "";
-  const d = document.createElement("div");
-  d.innerHTML = String(raw);
-  return (d.textContent || "").replace(/\s+/g," ").trim().replace(/\.$/,"");
+/* MEDLINE (texto): "TAG - valor", com linhas de continuação recuadas em 6 espaços. */
+function parseMedline(txt){
+  const recs = [];
+  let cur = null, last = null;
+  for(const line of txt.replace(/\r/g,"").split("\n")){
+    if(!line.trim()){ last = null; continue; }
+    const m = /^([A-Z][A-Z0-9]{1,3}) *- ?(.*)$/.exec(line);
+    if(m){
+      const tag = m[1], val = m[2];
+      if(tag==="PMID"){ cur = {}; recs.push(cur); }
+      if(!cur) continue;
+      (cur[tag] || (cur[tag]=[])).push(val.trim());
+      last = tag;
+    }else if(cur && last && /^\s/.test(line)){
+      const arr = cur[last];
+      arr[arr.length-1] += " " + line.trim();
+    }
+  }
+  return recs;
 }
-function fmtAuthors(arr){
-  if(!arr || !arr.length) return "";
-  const names = arr.filter(a=>a.authtype==="Author"&&a.name).map(a=>a.name);
-  if(!names.length) return "";
-  if(names.length<=2) return names.join(", ");
-  return names[0] + " et al.";
-}
-function parseDate(s){
+
+/* ---------- Datas ---------- */
+// Aceita "2026 Oct 15", "2026 Nov", "2026 Nov-Dec", "2026 Fall", "2026/10/15 06:00", "20261015".
+function parseLooseDate(s){
   if(!s) return 0;
-  const m = String(s).match(/(\d{4})\/(\d{2})\/(\d{2})/);
+  s = String(s).trim();
+  let m = /^(\d{4})(\d{2})(\d{2})$/.exec(s);
   if(m) return Date.UTC(+m[1], +m[2]-1, +m[3]);
-  const d = Date.parse(s); return isNaN(d)?0:d;
+  m = /^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/.exec(s);
+  if(m) return Date.UTC(+m[1], +m[2]-1, +m[3]);
+  m = /^(\d{4})(?:\s+([A-Za-z]+))?(?:[\s-]+(\d{1,2}))?/.exec(s);
+  if(m){
+    const w = (m[2]||"").toLowerCase();
+    let mon = MON_EN[w];
+    if(mon==null) mon = MON_EN[w.slice(0,3)];
+    if(mon==null) mon = 0;
+    const d = (m[2] && m[3]) ? Math.min(31, Math.max(1, +m[3])) : 1;
+    return Date.UTC(+m[1], mon, d);
+  }
+  return 0;
+}
+// Data exibida/ordenada: publicação eletrônica > data impressa (se não futura) > entrada no PubMed.
+function pickDate(epub, print, entrez){
+  const now = Date.now() + 86400000;
+  if(epub) return epub;
+  if(print && print <= now) return print;
+  return entrez || print || 0;
 }
 function fmtDate(ts){
   if(!ts) return "—";
   const d = new Date(ts);
   return String(d.getUTCDate()).padStart(2,"0") + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCFullYear();
 }
-function classify(title, hint){
-  const t = (title||"").toLowerCase();
-  const scores = {}; const tags = []; const topics = [];
-  for(const ch of CHANNELS){
-    let s = (ch._re && ch._re.test(t)) ? 1 : 0;
-    let groupHit = false;
-    for(const g of ch.g){
-      if(g._re && g._re.test(t)){
-        groupHit = true;
-        topics.push({chan:ch.code, code:g.code, name:g.name});
-      }
-    }
-    if(groupHit) s += 1;        // a specific disease group is strong evidence
-    if(hint===ch.code) s += 0.6;
-    if(s>0){ scores[ch.code]=s; tags.push(ch.code); }
-  }
-  if(!tags.length){
-    const p = hint || "GER";
-    return {primary:p, tags:[p], topics:[]};
-  }
-  tags.sort((a,b)=> (scores[b]-scores[a]) || (CHAN_ORDER[a]-CHAN_ORDER[b]));
-  // keep 2–3 most relevant subspecialty tags
-  const top = tags.slice(0,3);
-  // order topics by channel order, then keep them only for tagged channels
-  const tagged = new Set(top);
-  const topicList = topics
-    .filter(tp=>tagged.has(tp.chan))
-    .sort((a,b)=>(CHAN_ORDER[a.chan]-CHAN_ORDER[b.chan]));
-  return {primary:top[0], tags:top, topics:topicList};
+
+/* ---------- Normalização de registros ---------- */
+function cleanTitle(s){
+  return String(s||"").replace(/\s+/g," ").trim().replace(/\.$/,"");
+}
+// Títulos do esummary vêm com entidades/tags HTML. DOMParser não executa scripts
+// nem handlers (ao contrário de innerHTML num elemento do documento).
+const htmlParser = typeof DOMParser!=="undefined" ? new DOMParser() : null;
+function decodeHTML(raw){
+  if(!raw) return "";
+  if(!htmlParser) return String(raw).replace(/<[^>]*>/g,"");
+  const doc = htmlParser.parseFromString("<!doctype html><body>" + String(raw), "text/html");
+  return doc.body ? (doc.body.textContent || "") : "";
+}
+function fmtAuthors(names){
+  names = (names||[]).filter(Boolean);
+  if(!names.length) return "";
+  if(names.length<=2) return names.join(", ");
+  return names[0] + " et al.";
 }
 
-function buildArticle(jta, hint, sum){
-  if(!sum || !sum.uid) return null;
-  const title = decodeTitle(sum.title);
+// Tipo de publicação -> selo curto (o de maior prioridade)
+const PTYPES = [
+  [/^Retract(ed Publication|ion of Publication)$/i, "Retratação"],
+  [/^Meta-Analysis$/i, "Meta-análise"],
+  [/^Systematic Review$/i, "Revisão sistemática"],
+  [/^(Practice )?Guideline$|^Consensus Development Conference/i, "Diretriz"],
+  [/^Randomized Controlled Trial$/i, "ECR"],
+  [/^Clinical Trial/i, "Ensaio clínico"],
+  [/^Review$/i, "Revisão"],
+  [/^Case Reports$/i, "Relato de caso"],
+  [/^Editorial$/i, "Editorial"],
+  [/^(Comment|Letter)$/i, "Comentário"],
+];
+function ptypeLabel(list){
+  for(const [re, label] of PTYPES) if((list||[]).some(p=>re.test(p))) return label;
+  return "";
+}
+function isErratum(list){ return (list||[]).some(p=>/^(Published )?Erratum$/i.test(p)); }
+
+function recFromMedline(r){
+  const one = k => (r[k] && r[k][0]) || "";
+  const pmid = one("PMID");
+  const title = cleanTitle((r.TI||[]).join(" ") || (r.BTI||[]).join(" ") || (r.VTI||[]).join(" "));
+  if(!pmid || !title) return null;
+  let doi = "";
+  for(const v of (r.AID||[]).concat(r.LID||[])){ const m=/^(\S+)\s*\[doi\]/i.exec(v); if(m){ doi=m[1]; break; } }
+  let entrez = 0;
+  for(const v of (r.PHST||[])) if(/\[entrez\]/i.test(v)){ entrez = parseLooseDate(v); break; }
+  if(!entrez) entrez = parseLooseDate(one("EDAT"));
+  const print = parseLooseDate(one("DP"));
+  const epub = parseLooseDate(one("DEP"));
+  return {
+    pmid, title,
+    abstract: (r.AB||[]).join(" "),
+    mesh: (r.MH||[]).map(x=>x.replace(/\*/g,"").split("/")[0].trim()),
+    keywords: (r.OT||[]),
+    authors: (r.AU||[]).length ? r.AU : (r.FAU||[]),
+    journal: one("JT"), ta: one("TA"),
+    year: (one("DP").match(/\d{4}/)||[""])[0],
+    doi, pubtypes: r.PT||[],
+    ts: pickDate(epub, print, entrez),
+  };
+}
+function recFromSummary(sum){
+  if(!sum || !sum.uid || sum.error) return null;
+  const title = cleanTitle(decodeHTML(sum.title));
   if(!title) return null;
   let doi = "";
-  if(Array.isArray(sum.articleids))
-    for(const a of sum.articleids){ if(a.idtype==="doi"){ doi=a.value; break; } }
-  const ts = parseDate(sum.sortpubdate || sum.epubdate || sum.pubdate);
-  const cls = classify(title, hint);
+  for(const a of (sum.articleids||[])) if(a.idtype==="doi"){ doi=a.value; break; }
+  let entrez = 0;
+  for(const hh of (sum.history||[])) if(hh.pubstatus==="entrez"){ entrez = parseLooseDate(hh.date); break; }
   return {
-    pmid: sum.uid,
-    title,
-    jta,
-    journal: sum.fulljournalname || jta,
-    authors: fmtAuthors(sum.authors),
-    year: (sum.sortpubdate||"").slice(0,4) || (sum.pubdate||"").slice(0,4),
-    doi, ts,
+    pmid: String(sum.uid), title,
+    abstract: "", mesh: [], keywords: [],
+    authors: (sum.authors||[]).filter(a=>a.authtype==="Author" && a.name).map(a=>a.name),
+    journal: sum.fulljournalname || "", ta: sum.source || "",
+    year: ((sum.sortpubdate||sum.pubdate||"").match(/\d{4}/)||[""])[0],
+    doi, pubtypes: sum.pubtype||[],
+    ts: pickDate(parseLooseDate(sum.epubdate), parseLooseDate(sum.pubdate) || parseLooseDate(sum.sortpubdate), entrez),
+  };
+}
+function buildArticle(rec, j){
+  const cls = classify(rec, j.hint);
+  return {
+    pmid: rec.pmid,
+    title: rec.title,
+    jta: j.ta,
+    journal: rec.journal || j.name,
+    authors: fmtAuthors(rec.authors),
+    year: rec.year,
+    doi: rec.doi,
+    ts: rec.ts,
+    pt: ptypeLabel(rec.pubtypes),
     primary: cls.primary,
     tags: cls.tags,
     topics: cls.topics,
   };
 }
 
-/* ============================ Load orchestration ============================ */
-async function loadAll(force){
-  if(state.loading) return;
-  // cache
-  if(!force){
+/* ---------- Chamadas ao E-utilities ---------- */
+function withKey(u){ const k = apiKey(); return k ? u + "&api_key=" + encodeURIComponent(k) : u; }
+// edat = data de entrada no PubMed: é o que caracteriza "artigo novo" para um radar.
+function esearchURL(ta, days, sorted){
+  const term = '"' + ta + '"[ta]';
+  return withKey(EUTILS + "esearch.fcgi?db=pubmed&retmode=json&retmax=" + RETMAX_PER_JOURNAL +
+    "&datetype=edat&reldate=" + days + (sorted ? "&sort=pub_date" : "") +
+    "&term=" + encodeURIComponent(term) + NCBI_ID);
+}
+async function esearchJournal(j, days, signal){
+  let r = await fetchNCBI(esearchURL(j.ta, days, true), {signal, timeout:T_SEARCH, parse:parseSearchResp});
+  if(!Array.isArray(r.idlist) && r.ERROR)       // parâmetro de ordenação recusado -> sem ordenação
+    r = await fetchNCBI(esearchURL(j.ta, days, false), {signal, timeout:T_SEARCH, parse:parseSearchResp});
+  if(!Array.isArray(r.idlist)) throw new NetErr(r.ERROR ? "NCBI: "+r.ERROR : "resposta sem lista de PMIDs", "server");
+  return r.idlist.map(String);
+}
+// efetch MEDLINE traz título, resumo, MeSH e palavras-chave: base da classificação.
+async function efetchBatch(ids, signal){
+  const u = withKey(EUTILS + "efetch.fcgi?db=pubmed&rettype=medline&retmode=text&id=" + ids.join(",") + NCBI_ID);
+  const recs = await fetchNCBI(u, {signal, timeout:T_FETCH, parse:parseMedlineResp});
+  return recs.map(recFromMedline).filter(Boolean);
+}
+// Reserva: esummary (só título), caso o efetch falhe para um lote.
+async function esummaryBatch(ids, signal){
+  const u = withKey(EUTILS + "esummary.fcgi?db=pubmed&retmode=json&id=" + ids.join(",") + NCBI_ID);
+  const res = await fetchNCBI(u, {signal, timeout:T_FETCH, parse:parseSummaryResp});
+  return ids.map(id=>recFromSummary(res[id])).filter(Boolean);
+}
+
+async function pool(items, n, fn){
+  let i = 0;
+  const worker = async () => { while(i < items.length){ const idx = i++; await fn(items[idx], idx); } };
+  await Promise.all(Array.from({length: Math.max(1, Math.min(n, items.length))}, worker));
+}
+
+/* Sincronização completa. Não mexe na interface: reporta via callbacks. */
+async function syncFeed(days, signal, ui){
+  const key = !!apiKey();
+  const idToJ = new Map();
+  const order = [];
+  let okJ = 0, done = 0, lastErr = null;
+  let failed = [];
+  const total = JOURNALS.length;
+
+  // Se nenhum dos primeiros periódicos responde, a rede/NCBI está fora: desiste
+  // logo em vez de insistir com os 48 (o que levaria minutos até a mensagem de erro).
+  let failCount = 0;
+  const giveUp = () => okJ===0 && failCount>=3;
+  const searchOne = async j => {
+    if(giveUp()) return false;
     try{
-      const c = JSON.parse(store.get(STORE+":data:"+state.days) || "null");
-      if(c && c.articles && (Date.now()-c.ts) < CACHE_TTL){
-        state.articles=c.articles; state.ts=c.ts; state.loaded=c.loaded; state.total=c.total;
-        renderAll(); setSync(""); return;
-      }
-    }catch(e){}
+      const ids = await esearchJournal(j, days, signal);
+      okJ++;
+      for(const id of ids) if(!idToJ.has(id)){ idToJ.set(id, j); order.push(id); }
+      return true;
+    }catch(e){
+      if(e.kind==="abort") throw e;
+      lastErr = e; failCount++;
+      return false;
+    }
+  };
+
+  await pool(JOURNALS, key ? 6 : 3, async j => {
+    if(!(await searchOne(j))) failed.push(j);
+    done++;
+    ui.status("Consultando periódicos… " + done + "/" + total + (lastRoute!=="direct" ? " (via proxy)" : ""));
+    ui.progress(0.55 * done / total);
+  });
+  // 2ª passada para os periódicos que falharam (falhas costumam ser transitórias)
+  if(failed.length && okJ){
+    await sleep(1500, signal);
+    const retry = failed; failed = [];
+    for(const j of retry){ if(!(await searchOne(j))) failed.push(j); }
+  }
+  if(!okJ){
+    throw new NetErr("Nenhum periódico respondeu" + (lastErr ? " (" + lastErr.message + ")" : "") + ".", lastErr ? lastErr.kind : "net");
   }
 
-  state.loading = true; setBanner("");
-  const btn=$("#refresh"); btn.classList.add("loading"); btn.disabled=true;
-  $("#refreshLabel").textContent="Sincronizando…";
-  $("#pulse").classList.add("live");
-  $("#prog").classList.add("on");
-  showSkeletons();
+  // Detalhes dos artigos, em lotes
+  const batches = [];
+  for(let i=0;i<order.length;i+=FETCH_BATCH) batches.push(order.slice(i,i+FETCH_BATCH));
+  const recs = new Map();
+  const built = new Map();   // pmid -> artigo classificado (evita reclassificar a cada lote)
+  let bdone = 0, lost = 0, titleOnly = 0;
+  const articlesSoFar = () => {
+    const out = [];
+    for(const id of order){
+      const rec = recs.get(id);
+      if(!rec || isErratum(rec.pubtypes)) continue;
+      let a = built.get(id);
+      if(!a){ a = buildArticle(rec, idToJ.get(id)); built.set(id, a); }
+      out.push(a);
+    }
+    return out.sort((a,b)=> (b.ts - a.ts) || (+b.pmid - +a.pmid));
+  };
+  ui.status("Carregando artigos… 0/" + order.length);
+  await pool(batches, key ? 3 : 2, async ids => {
+    let got = null;
+    try{ got = await efetchBatch(ids, signal); }
+    catch(e){ if(e.kind==="abort") throw e; lastErr = e; }
+    if(!got || !got.length){
+      try{ got = await esummaryBatch(ids, signal); titleOnly += got.length; }
+      catch(e){ if(e.kind==="abort") throw e; lastErr = e; got = []; }
+    }
+    const have = new Set();
+    for(const r of got){ recs.set(r.pmid, r); have.add(r.pmid); }
+    lost += ids.filter(id=>!have.has(id)).length;
+    bdone++;
+    ui.status("Carregando artigos… " + recs.size + "/" + order.length);
+    ui.progress(0.55 + 0.45 * bdone / batches.length);
+    try{ ui.partial(articlesSoFar()); }catch(e){ console.warn("[Radar Neuro] render parcial:", e); }
+  });
+  if(order.length && !recs.size){
+    throw new NetErr("Os periódicos responderam, mas os detalhes dos artigos não puderam ser baixados" +
+      (lastErr ? " (" + lastErr.message + ")" : "") + ".", lastErr ? lastErr.kind : "net");
+  }
+  return {
+    articles: articlesSoFar(),
+    loaded: okJ, total,
+    failed: failed.map(j=>j.ta),
+    lost, titleOnly,
+  };
+}
 
-  const k = apiKey();
-  const chunk = k ? 8 : 3;
-  const gap = k ? 220 : 1100;
-  const idToJ = {}; const idSet = [];
-  let ok=0, fail=0, done=0;
-
+/* ============================ Cache ============================ */
+function readCache(days){
   try{
-    for(let i=0;i<JOURNALS.length;i+=chunk){
-      const part = JOURNALS.slice(i,i+chunk);
-      const res = await Promise.all(part.map(j=>esearchJournal(j, state.days)));
-      res.forEach((ids,idx)=>{
-        const j=part[idx]; done++;
-        if(ids===null){ fail++; return; }
-        ok++;
-        for(const id of ids){ if(!idToJ[id]){ idToJ[id]=j; idSet.push(id); } }
-      });
-      setSync("Consultando periódicos… " + done + "/" + JOURNALS.length);
-      setProgress(done/(JOURNALS.length+1));
-      if(i+chunk<JOURNALS.length) await sleep(gap);
+    const c = JSON.parse(store.get(DATA + days) || "null");
+    if(c && c.v===DATA_VERSION && Array.isArray(c.articles) && c.ts) return c;
+  }catch(e){}
+  return null;
+}
+function writeCache(days, payload){
+  const s = JSON.stringify(Object.assign({v:DATA_VERSION, days}, payload));
+  if(store.set(DATA + days, s)) return;
+  // cota estourada: descarta as outras janelas e tenta de novo
+  for(const k of store.keys()) if(k.startsWith(DATA) && k !== DATA + days) store.remove(k);
+  store.set(DATA + days, s);
+}
+function purgeOldCaches(){
+  for(const k of store.keys()){
+    if(k.startsWith(PREFS + ":data:")) store.remove(k);           // formato antigo (v2)
+    else if(k.startsWith(DATA)){
+      try{ const c = JSON.parse(store.get(k)||"null"); if(!c || c.v!==DATA_VERSION) store.remove(k); }
+      catch(e){ store.remove(k); }
     }
+  }
+}
+function applyData(c){
+  state.articles = c.articles; state.ts = c.ts; state.loaded = c.loaded; state.total = c.total;
+  state.dataDays = c.days || state.days;
+}
 
-    if(!ok) throw new Error("Nenhum periódico respondeu.");
+/* ============================ Load orchestration ============================ */
+function uiBusy(on){
+  const btn = $("#refresh");
+  btn.classList.toggle("loading", on);
+  $("#refreshLabel").textContent = on ? "Sincronizando…" : "Atualizar";
+  $("#pulse").classList.toggle("live", on);
+  $("#prog").classList.toggle("on", on);
+  if(!on){ setProgress(0); setSync(""); }
+}
 
-    setSync("Carregando artigos…");
-    const summaries = {};
-    for(let i=0;i<idSet.length;i+=100){
-      const batch = idSet.slice(i,i+100);
-      Object.assign(summaries, await esummaryBatch(batch));
-      if(i+100<idSet.length) await sleep(gap);
+async function loadAll(force){
+  const days = state.days;
+  // 1) mostra imediatamente o que houver em cache para esta janela (mesmo vencido)
+  const cached = readCache(days);
+  if(cached){
+    applyData(cached); renderAll();
+    if(!force && (Date.now() - cached.ts) < CACHE_TTL){
+      if(sync){ sync.ctl.abort(); sync = null; uiBusy(false); }
+      return;
     }
-    setProgress(1);
+  }else if(state.dataDays !== days){
+    state.articles = []; state.ts = 0; state.loaded = 0; state.dataDays = days;
+    renderAll();
+  }
 
-    const arts = [];
-    for(const id of idSet){
-      const sum = summaries[id];
-      const j = idToJ[id];
-      const a = sum && j ? buildArticle(j.ta, j.hint, sum) : null;
-      if(a) arts.push(a);
-    }
-    arts.sort((a,b)=> b.ts - a.ts);
+  // 2) cancela uma sincronização anterior (ex.: troca de janela no meio do caminho)
+  if(sync) sync.ctl.abort();
+  const me = {ctl: new AbortController(), gen: ++syncGen};
+  sync = me;
+  const current = () => sync === me;
+  const hadData = state.articles.length > 0;
 
-    state.articles = arts; state.loaded = ok; state.total = JOURNALS.length; state.ts = Date.now();
-    try{ store.set(STORE+":data:"+state.days, JSON.stringify({ts:state.ts,loaded:ok,total:JOURNALS.length,articles:arts})); }catch(e){}
-
-    if(fail) setBanner(fail + " periódico(s) não responderam nesta sincronização; os demais foram carregados.");
+  setBanner(""); uiBusy(true); showSkeletons();
+  try{
+    const res = await syncFeed(days, me.ctl.signal, {
+      status: t => { if(current()) setSync(t); },
+      progress: f => { if(current()) setProgress(f); },
+      partial: arts => {
+        if(!current() || hadData || !arts.length) return;
+        state.articles = arts; state.dataDays = days;
+        state.loaded = 0; state.total = JOURNALS.length;
+        renderChannels(); renderFeed();
+      },
+    });
+    if(!current()) return;
+    state.articles = res.articles; state.loaded = res.loaded; state.total = res.total;
+    state.ts = Date.now(); state.dataDays = days;
+    writeCache(days, {ts:state.ts, loaded:res.loaded, total:res.total, articles:res.articles});
+    const notes = [];
+    if(res.failed.length) notes.push(res.failed.length + " periódico(s) não responderam (" + res.failed.slice(0,4).join(", ") + (res.failed.length>4?"…":"") + ")");
+    if(res.lost) notes.push(res.lost + " artigo(s) não puderam ser baixados");
+    if(res.titleOnly) notes.push(res.titleOnly + " artigo(s) classificados só pelo título");
+    setBanner(notes.length ? notes.join("; ") + ". Os demais foram carregados — toque em Atualizar para tentar de novo." : "");
     renderAll();
   }catch(err){
-    // try stale cache as fallback
-    let recovered=false;
-    try{
-      const c = JSON.parse(store.get(STORE+":data:"+state.days) || "null");
-      if(c && c.articles && c.articles.length){
-        state.articles=c.articles; state.ts=c.ts; state.loaded=c.loaded; state.total=c.total;
-        renderAll(); setBanner("Conexão falhou — exibindo a última sincronização salva."); recovered=true;
-      }
-    }catch(e){}
-    if(!recovered) renderError(err);
+    if(!current() || (err && err.kind==="abort")) return;
+    console.warn("[Radar Neuro] sincronização falhou:", err);
+    if(state.articles.length){
+      renderAll();
+      setBanner("Não foi possível sincronizar agora (" + (err && err.message || "erro") + "). Exibindo a última sincronização salva.");
+    }else{
+      renderError(err);
+    }
   }finally{
-    state.loading=false;
-    btn.classList.remove("loading"); btn.disabled=false;
-    $("#refreshLabel").textContent="Atualizar";
-    $("#pulse").classList.remove("live");
-    $("#prog").classList.remove("on"); setProgress(0);
-    setStatus(); setSync("");
+    if(current()){ sync = null; uiBusy(false); setStatus(); }
   }
 }
 
 /* ============================ Rendering ============================ */
 function setSync(t){ const e=$("#st-sync"); if(e){ e.textContent = t || ""; } }
-function setProgress(f){ const p=$("#prog"); if(p&&p.firstElementChild) p.firstElementChild.style.width = Math.round(f*100)+"%"; }
+function setProgress(f){ const p=$("#prog"); if(p&&p.firstElementChild) p.firstElementChild.style.width = Math.round(Math.max(0,Math.min(1,f))*100)+"%"; }
 function setBanner(t){
   const b=$("#banner"); if(t){ $("#bannerText").textContent=t; b.classList.add("on"); } else b.classList.remove("on");
 }
 function setStatus(){
   const s=$("#st-stats"); if(!s) return;
   s.innerHTML="";
-  const synced = state.ts ? "sincronizado " + relTime(state.ts) : "—";
+  const synced = state.ts ? "sincronizado " + relTime(state.ts) : (sync ? "sincronizando" : "—");
   const parts = [
-    ["", state.articles.length + " artigos"],
-    ["dot","·"],
-    ["", state.loaded + "/" + state.total + " periódicos"],
-    ["dot","·"],
-    ["", "janela " + state.days + "d"],
-    ["dot","·"],
-    ["", synced],
+    state.articles.length + " artigos",
+    (state.loaded || "—") + "/" + state.total + " periódicos",
+    "janela " + state.dataDays + "d",
+    synced,
   ];
-  for(const [cls,txt] of parts){
-    if(cls==="dot") s.append(h("span",{class:"dot"},txt));
-    else s.append(h("b",{},txt));
-  }
+  parts.forEach((txt,i)=>{
+    if(i) s.append(h("span",{class:"dot"},"·"));
+    s.append(h("b",{},txt));
+  });
 }
 function relTime(ts){
   const m = Math.round((Date.now()-ts)/60000);
@@ -893,98 +1311,111 @@ function relTime(ts){
   return "em " + fmtDate(ts);
 }
 
-// channel counts são por rótulo (multi-tag): a soma pode exceder o total
-function counts(){
-  const c = {}; for(const ch of CHANNELS) c[ch.code]=0;
-  for(const a of visibleBase()) for(const code of a.tags) if(code in c) c[code]++;
-  return c;
-}
 // articles passing journal + query filters (but not channel) — basis for channel counts
 function visibleBase(){
-  const q = state.query.toLowerCase();
+  const q = normText(state.query).toLowerCase();
   return state.articles.filter(a=>{
     if(!state.active.has(a.jta)) return false;
     if(q){
-      const hay = (a.title+" "+a.authors+" "+a.journal+" "+a.jta).toLowerCase();
+      const hay = normText(a.title+" "+a.authors+" "+a.journal+" "+a.jta).toLowerCase();
       if(!hay.includes(q)) return false;
     }
     return true;
   });
 }
+// contagens por rótulo (multi-tag): a soma pode exceder o total
+function counts(base){
+  const c = {}; for(const ch of CHANNELS) c[ch.code]=0;
+  for(const a of base) for(const code of a.tags) if(code in c) c[code]++;
+  return c;
+}
 
+function selectChannel(code){
+  state.channel = code; state.group = null;
+  renderChannels(); renderFeed();
+}
 function renderChannels(){
-  const c = counts();
+  const base = visibleBase();
+  const c = counts(base);
   const ul = $("#channels"); ul.innerHTML="";
   const chips = $("#chips"); chips.innerHTML="";
 
-  const mk = (code,label,n,activeCode)=>{
-    const active = state.channel===activeCode;
+  const mk = (code,label,n)=>{
+    const active = state.channel===code;
     const color = code==="ALL" ? "var(--signal)" : "var(--c-"+code+")";
-    const li = h("button",{class:"chan"+(active?" active":""), style:"--chan:"+color,
-        "data-empty": (code!=="ALL"&&!n)?"1":null,
-        onclick:()=>{ state.channel=activeCode; state.group=null; renderChannels(); renderFeed(); }},
-      h("span",{class:"chan__code",style:code==="ALL"?"background:var(--ink)":""}, code==="ALL"?"ALL":code),
+    ul.append(h("button",{class:"chan"+(active?" active":""), style:"--chan:"+color,
+        "data-empty": (code!=="ALL"&&!n)?"1":null, "aria-pressed": active?"true":"false",
+        onclick:()=>selectChannel(code)},
+      h("span",{class:"chan__code",style:code==="ALL"?"background:var(--ink)":""}, code),
       h("span",{class:"chan__name"}, label),
-      h("span",{class:"chan__n"}, code==="ALL"? String(visibleBase().length): String(n))
-    );
-    ul.append(li);
-
-    const chip = h("button",{class:"chip"+(active?" active":""), style:"--chan:"+color,
-        onclick:()=>{ state.channel=activeCode; state.group=null; renderChannels(); renderFeed(); }},
+      h("span",{class:"chan__n"}, String(n))
+    ));
+    chips.append(h("button",{class:"chip"+(active?" active":""), style:"--chan:"+color,
+        onclick:()=>selectChannel(code)},
       h("span",{}, code==="ALL"?"Todas":code),
-      h("span",{class:"n"}, code==="ALL"? String(visibleBase().length): String(n))
-    );
-    chips.append(chip);
+      h("span",{class:"n"}, String(n))
+    ));
   };
 
-  mk("ALL","Todas as subespecialidades", 0, "ALL");
-  for(const ch of CHANNELS) mk(ch.code, ch.name, c[ch.code]||0, ch.code);
+  mk("ALL","Todas as subespecialidades", base.length);
+  for(const ch of CHANNELS) mk(ch.code, ch.name, c[ch.code]||0);
 }
 
 function renderJournals(){
   const box=$("#jrnls"); box.innerHTML="";
   for(const j of JOURNALS){
-    const row=h("label",{class:"jrow"},
+    box.append(h("label",{class:"jrow"},
       h("input",{type:"checkbox", checked:state.active.has(j.ta),
         onchange:e=>{ e.target.checked?state.active.add(j.ta):state.active.delete(j.ta); renderChannels(); renderFeed(); }}),
-      h("span",{},
-        h("span",{class:"ta"}, j.ta),
-        j.name
-      )
-    );
-    box.append(row);
+      h("span",{}, h("span",{class:"ta"}, j.ta), j.name)
+    ));
   }
+}
+
+function copyText(txt){
+  if(navigator.clipboard && window.isSecureContext)
+    return navigator.clipboard.writeText(txt).then(()=>true, ()=>legacyCopy(txt));
+  return Promise.resolve(legacyCopy(txt));
+}
+function legacyCopy(txt){
+  try{
+    const ta = h("textarea",{style:"position:fixed;top:-1000px;opacity:0", readonly:true});
+    ta.value = txt; document.body.append(ta); ta.select();
+    const ok = document.execCommand("copy"); ta.remove(); return ok;
+  }catch(e){ return false; }
 }
 
 function articleCard(a){
   const color = "var(--c-"+a.primary+")";
   const top = h("div",{class:"card__top"},
     h("span",{class:"card__ta"}, a.jta),
-    h("span",{class:"card__date"}, fmtDate(a.ts))
+    h("span",{class:"card__date"}, fmtDate(a.ts)),
+    a.pt ? h("span",{class:"ptype"}, a.pt) : null
   );
   const foot = h("div",{class:"card__foot"});
   // grupos de doenças (2º nível), com o nome legível
   const topics = (a.topics||[]).slice(0,3);
   for(const tp of topics)
     foot.append(h("span",{class:"tag", style:"--chan:var(--c-"+tp.chan+")", title:CHAN_BY_CODE[tp.chan]?CHAN_BY_CODE[tp.chan].name:tp.chan}, tp.name));
-  // subespecialidades extras (overlap) que ainda não apareceram via um grupo
+  // subespecialidades (inclusive sobreposições) que ainda não apareceram via um grupo
   const shownChans = new Set(topics.map(t=>t.chan));
   for(const tg of a.tags){
-    if(tg===a.primary && topics.length) continue;
     if(shownChans.has(tg)) continue;
     foot.append(h("span",{class:"tag tag--code", style:"--chan:var(--c-"+tg+")", title:CHAN_BY_CODE[tg]?CHAN_BY_CODE[tg].name:tg}, tg));
     shownChans.add(tg);
   }
   foot.append(h("span",{class:"spacer"}));
-  const copyBtn = h("button",{class:"iconbtn", title:"Copiar referência",
-    onclick:e=>{
-      const ref = (a.authors?a.authors+". ":"") + a.title + ". " + a.jta + (a.year?". "+a.year:"") + "." + (a.doi?" doi:"+a.doi:"");
-      navigator.clipboard && navigator.clipboard.writeText(ref);
-      e.currentTarget.classList.add("copied"); e.currentTarget.textContent="copiado";
-      setTimeout(()=>{ e.currentTarget.classList.remove("copied"); e.currentTarget.textContent="copiar"; },1400);
-    }}, "copiar");
+  const copyBtn = h("button",{class:"iconbtn", type:"button", title:"Copiar referência"}, "copiar");
+  copyBtn.addEventListener("click", ()=>{
+    const ref = (a.authors?a.authors+". ":"") + a.title + ". " + a.jta + (a.year?". "+a.year:"") + "." + (a.doi?" doi:"+a.doi:"");
+    copyText(ref).then(ok=>{
+      copyBtn.classList.toggle("copied", ok);
+      copyBtn.textContent = ok ? "copiado" : "falhou";
+      setTimeout(()=>{ copyBtn.classList.remove("copied"); copyBtn.textContent="copiar"; }, 1400);
+    });
+  });
   foot.append(copyBtn);
-  foot.append(h("a",{class:"lnk", href:"https://pubmed.ncbi.nlm.nih.gov/"+a.pmid+"/", target:"_blank", rel:"noopener"}, "PubMed"));
+  foot.append(h("a",{class:"lnk", href:"https://pubmed.ncbi.nlm.nih.gov/"+encodeURIComponent(a.pmid)+"/", target:"_blank", rel:"noopener"}, "PubMed"));
   if(a.doi) foot.append(h("a",{class:"lnk lnk--mute", href:"https://doi.org/"+a.doi, target:"_blank", rel:"noopener"}, "DOI"));
 
   return h("article",{class:"card", style:"--chan:"+color},
@@ -998,10 +1429,9 @@ function articleCard(a){
 // Barra de grupos de doenças (2º nível) para o canal selecionado.
 function renderSubnav(chan, taggedList){
   const nav=$("#subnav"); nav.innerHTML="";
-  if(chan==="ALL"){ return; }
+  if(chan==="ALL") return;
   const ch = CHAN_BY_CODE[chan]; if(!ch || !ch.g.length) return;
   const color="var(--c-"+chan+")";
-  // contagem por grupo
   const gcount={};
   for(const a of taggedList) for(const tp of (a.topics||[])) if(tp.chan===chan) gcount[tp.code]=(gcount[tp.code]||0)+1;
 
@@ -1015,13 +1445,29 @@ function renderSubnav(chan, taggedList){
   for(const g of ch.g){ const n=gcount[g.code]||0; if(n) nav.append(mk(g.code,g.name,n)); }
 }
 
+function section(cls, color, headKids, list){
+  const sec = h("section",{class:cls, style:"--chan:"+color}, h("div",{class:cls+"__head"}, ...headKids));
+  const wrap = h("div",{class:"cards"}); list.forEach(a=>wrap.append(articleCard(a)));
+  sec.append(wrap);
+  return sec;
+}
+const nArt = n => n + (n===1?" artigo":" artigos");
+
 function renderFeed(){
   const feed=$("#feed"); feed.innerHTML="";
+  const subnav=$("#subnav");
 
-  if(!state.articles.length){ $("#subnav").innerHTML=""; return; } // skeleton/error/initial
+  if(!state.articles.length){
+    subnav.innerHTML="";
+    if(sync) showSkeletons();
+    else if(state.ts) feed.append(h("div",{class:"state"},
+      h("h2",{},"Nenhum artigo nesta janela"),
+      h("p",{},"Os periódicos não publicaram artigos novos no período. Tente ampliar a janela.")));
+    return;
+  }
   const base = visibleBase();
   if(!base.length){
-    $("#subnav").innerHTML="";
+    subnav.innerHTML="";
     feed.append(h("div",{class:"state"},
       h("h2",{},"Nada nesta seleção"),
       h("p",{},"Ajuste a busca ou reative periódicos no filtro à esquerda.")));
@@ -1033,6 +1479,7 @@ function renderFeed(){
     const ch = CHAN_BY_CODE[chan];
     // multi-tag: artigos rotulados com este canal (não só os de primário)
     const tagged = base.filter(a=>a.tags.includes(chan));
+    if(state.group && !GROUP_NAME[chan+":"+state.group]) state.group = null;
     renderSubnav(chan, tagged);
 
     if(!tagged.length){
@@ -1042,9 +1489,8 @@ function renderFeed(){
       return;
     }
 
-    // grupo de doenças selecionado -> lista plana
     if(state.group){
-      const gname = GROUP_NAME[chan+":"+state.group] || state.group;
+      const gname = GROUP_NAME[chan+":"+state.group];
       const list = tagged.filter(a=>(a.topics||[]).some(tp=>tp.chan===chan && tp.code===state.group));
       if(!list.length){
         feed.append(h("div",{class:"state"},
@@ -1064,82 +1510,79 @@ function renderFeed(){
       const list = tagged.filter(a=>(a.topics||[]).some(tp=>tp.chan===chan && tp.code===g.code));
       if(!list.length) continue;
       list.forEach(a=>seen.add(a.pmid));
-      const sub=h("section",{class:"subsec", style:"--chan:"+color},
-        h("div",{class:"subsec__head"},
-          h("span",{class:"subsec__dot"}),
-          h("span",{class:"subsec__title"}, g.name),
-          h("span",{class:"subsec__n"}, list.length + (list.length===1?" artigo":" artigos"))
-        ));
-      const wrap=h("div",{class:"cards"}); list.forEach(a=>wrap.append(articleCard(a)));
-      sub.append(wrap); feed.append(sub);
+      feed.append(section("subsec", color, [
+        h("span",{class:"subsec__dot"}), h("span",{class:"subsec__title"}, g.name), h("span",{class:"subsec__n"}, nArt(list.length))
+      ], list));
     }
     const outros = tagged.filter(a=>!seen.has(a.pmid));
     if(outros.length){
-      const sub=h("section",{class:"subsec", style:"--chan:"+color},
-        h("div",{class:"subsec__head"},
-          h("span",{class:"subsec__dot"}),
-          h("span",{class:"subsec__title"}, ch.g.length? "Outros / geral" : ch.name),
-          h("span",{class:"subsec__n"}, outros.length + (outros.length===1?" artigo":" artigos"))
-        ));
-      const wrap=h("div",{class:"cards"}); outros.forEach(a=>wrap.append(articleCard(a)));
-      sub.append(wrap); feed.append(sub);
+      feed.append(section("subsec", color, [
+        h("span",{class:"subsec__dot"}), h("span",{class:"subsec__title"}, ch.g.length? "Outros / geral" : ch.name), h("span",{class:"subsec__n"}, nArt(outros.length))
+      ], outros));
     }
     return;
   }
 
   // ALL: agrupado por subespecialidade (primário), em ordem de canal
-  $("#subnav").innerHTML="";
+  subnav.innerHTML="";
   const groups = {};
   for(const a of base){ (groups[a.primary]||(groups[a.primary]=[])).push(a); }
   for(const ch of CHANNELS){
     const list = groups[ch.code]; if(!list||!list.length) continue;
-    const color="var(--c-"+ch.code+")";
-    const sec=h("section",{class:"section", style:"--chan:"+color},
-      h("div",{class:"section__head"},
-        h("span",{class:"section__code"}, ch.code),
-        h("span",{class:"section__title"}, ch.name),
-        h("span",{class:"section__n"}, list.length + (list.length===1?" artigo":" artigos"))
-      )
-    );
-    const wrap=h("div",{class:"cards"}); list.forEach(a=>wrap.append(articleCard(a)));
-    sec.append(wrap); feed.append(sec);
+    feed.append(section("section", "var(--c-"+ch.code+")", [
+      h("span",{class:"section__code"}, ch.code), h("span",{class:"section__title"}, ch.name), h("span",{class:"section__n"}, nArt(list.length))
+    ], list));
   }
 }
 
 function showSkeletons(){
+  if(state.articles.length) return; // mantém o conteúdo atual durante a atualização
   const feed=$("#feed");
-  if(state.articles.length) return; // keep existing content while refreshing
   feed.innerHTML="";
   const wrap=h("div",{class:"cards"});
   for(let i=0;i<6;i++) wrap.append(h("div",{class:"skel"}));
   feed.append(wrap);
 }
 function renderError(err){
-  $("#feed").innerHTML="";
-  $("#feed").append(h("div",{class:"state"},
+  const feed=$("#feed"); feed.innerHTML=""; $("#subnav").innerHTML="";
+  const kind = err && err.kind;
+  const why = kind==="rate"
+    ? "O NCBI limitou temporariamente as consultas deste endereço."
+    : kind==="net"
+      ? "O navegador não conseguiu alcançar o PubMed (sem internet, rede que bloqueia o domínio ncbi.nlm.nih.gov ou extensão de bloqueio)."
+      : "O PubMed/NCBI não respondeu como esperado.";
+  feed.append(h("div",{class:"state"},
     h("h2",{},"Não foi possível sincronizar"),
-    h("p",{}, (err&&err.message?err.message+" ":"") + "Verifique a conexão e tente novamente. Se o problema persistir, pode ser bloqueio temporário do NCBI ou do proxy — costuma se resolver em alguns minutos."),
-    h("p",{class:"hint"}, "Dica: cadastrar uma Chave NCBI (nas configurações, ícone de engrenagem) aumenta o limite de consultas e reduz muito a chance de bloqueio."),
-    h("button",{class:"btn", onclick:()=>loadAll(true)}, "Tentar de novo")
+    h("p",{}, why + " " + (err && err.message ? "Detalhe: " + err.message : "")),
+    h("p",{class:"hint"}, "Aguarde um ou dois minutos e tente de novo. Cadastrar uma Chave NCBI (em Configurações) aumenta o limite de consultas e reduz muito a chance de bloqueio."),
+    h("button",{class:"btn", type:"button", onclick:()=>loadAll(true)}, "Tentar de novo")
   ));
 }
 function renderAll(){ renderChannels(); renderFeed(); setStatus(); }
 
 /* ============================ Wire up ============================ */
 function init(){
-  // restore prefs
-  const sd = store.get(STORE+":days"); if(sd){ state.days=+sd; $("#window").value=sd; }
-  const sk = store.get(STORE+":key"); if(sk) $("#apikey").value=sk;
+  purgeOldCaches();
+  // restaura preferências
+  const sd = store.get(PREFS+":days");
+  if(sd && $("#window").querySelector('option[value="'+(+sd)+'"]')){ state.days = state.dataDays = +sd; $("#window").value = String(+sd); }
+  const sk = store.get(PREFS+":key"); if(sk) $("#apikey").value=sk;
 
   renderChannels(); renderJournals(); setStatus();
 
   $("#window").addEventListener("change", e=>{
-    state.days=+e.target.value; store.set(STORE+":days", e.target.value);
-    state.channel="ALL"; state.group=null; loadAll(false);
+    state.days = +e.target.value; store.set(PREFS+":days", e.target.value);
+    state.channel = "ALL"; state.group = null;
+    loadAll(false);
   });
   $("#q").addEventListener("input", e=>{ state.query=e.target.value.trim(); renderChannels(); renderFeed(); });
   $("#refresh").addEventListener("click", ()=>loadAll(true));
-  $("#apikey").addEventListener("change", e=>store.set(STORE+":key", e.target.value.trim()));
+  const saveKey = e=>{
+    const v = e.target.value.trim();
+    if(v) store.set(PREFS+":key", v); else store.remove(PREFS+":key");
+  };
+  $("#apikey").addEventListener("change", saveKey);
+  $("#apikey").addEventListener("input", saveKey);
   $("#jall").addEventListener("click", ()=>{ state.active=new Set(JOURNALS.map(j=>j.ta)); renderJournals(); renderChannels(); renderFeed(); });
   $("#jnone").addEventListener("click", ()=>{ state.active=new Set(); renderJournals(); renderChannels(); renderFeed(); });
 
@@ -1150,7 +1593,14 @@ function init(){
     deferredPrompt=null; $("#install").hidden=true;
   });
 
-  loadAll(false); // automatic first sync
+  // Ao voltar ao app (PWA em segundo plano) com dados vencidos, sincroniza sozinho.
+  document.addEventListener("visibilitychange", ()=>{
+    if(document.visibilityState==="visible" && !sync && (!state.ts || Date.now()-state.ts > CACHE_TTL)) loadAll(false);
+  });
+  window.addEventListener("online", ()=>{ if(!sync && (!state.ts || Date.now()-state.ts > CACHE_TTL)) loadAll(false); });
+  setInterval(()=>{ if(!sync) setStatus(); }, 60000);
+
+  loadAll(false); // primeira sincronização automática
 }
 let deferredPrompt = null;
 window.addEventListener("beforeinstallprompt", e=>{
@@ -1161,11 +1611,12 @@ window.addEventListener("appinstalled", ()=>{
   deferredPrompt = null;
   const b = document.getElementById("install"); if(b) b.hidden = true;
 });
-if("serviceWorker" in navigator){
+if("serviceWorker" in navigator && location.protocol !== "file:"){
   window.addEventListener("load", ()=>{ navigator.serviceWorker.register("sw.js").catch(()=>{}); });
 }
 
-document.addEventListener("DOMContentLoaded", init);
+if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+else init();
 </script>
 </body>
 </html>
